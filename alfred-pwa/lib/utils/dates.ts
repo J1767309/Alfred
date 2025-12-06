@@ -5,7 +5,7 @@ const TIMEZONE = 'America/Chicago'; // Central Time
 
 export function formatDate(date: string | Date, formatStr: string = 'PPP'): string {
   const d = typeof date === 'string' ? parseISO(date) : date;
-  return formatInTimeZone(d, 'UTC', formatStr);
+  return formatInTimeZone(d, TIMEZONE, formatStr);
 }
 
 export function formatRelative(date: string | Date): string {
