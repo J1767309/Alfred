@@ -1,5 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
+import { formatInTimeZone } from 'date-fns-tz';
+
+const TIMEZONE = 'America/Chicago'; // Central Time
 
 // Create a Supabase client for webhook (no cookies needed)
 const supabase = createClient(
@@ -21,11 +24,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Convert the UTC date to Central Time for storage
+    // This ensures the date field shows the correct day in Central Time
+    const utcDate = new Date(payload.date);
+    const centralTimeDate = formatInTimeZone(utcDate, TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss.SSSxxx");
+
     // Store the transcription in Supabase
     const { data, error } = await supabase
       .from('transcriptions')
       .insert({
-        date: payload.date,
+        date: centralTimeDate,
         transcription: payload.transcription,
         transcriptions: payload.transcriptions || [],
         raw_payload: payload
