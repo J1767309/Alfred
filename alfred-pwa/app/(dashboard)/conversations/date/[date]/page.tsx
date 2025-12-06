@@ -40,6 +40,7 @@ export default function ConversationsDatePage() {
   const [copied, setCopied] = useState(false);
   const [copiedTopicId, setCopiedTopicId] = useState<string | null>(null);
   const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
+  const [selectedTranscripts, setSelectedTranscripts] = useState<Set<string>>(new Set());
   const supabase = createClient();
 
   const dateParam = params.date as string;
@@ -311,6 +312,69 @@ export default function ConversationsDatePage() {
     });
   };
 
+  // Toggle transcript selection
+  const toggleTranscriptSelection = (transcriptId: string) => {
+    setSelectedTranscripts(prev => {
+      const next = new Set(prev);
+      if (next.has(transcriptId)) {
+        next.delete(transcriptId);
+      } else {
+        next.add(transcriptId);
+      }
+      return next;
+    });
+  };
+
+  // Cluster selected transcripts
+  const handleClusterSelected = async () => {
+    if (selectedTranscripts.size === 0) return;
+
+    setClustering(true);
+    setClusterError(null);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 180000);
+
+    try {
+      const response = await fetch('/api/clustering/topics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: dateParam,
+          transcriptIds: Array.from(selectedTranscripts)
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || `Server error: ${response.status}`);
+      }
+
+      if (data.topics && data.topics.length > 0) {
+        const allTopics = [...topics, ...data.topics];
+        const sortedTopics = allTopics.sort(
+          (a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
+        );
+        setTopics(sortedTopics);
+        setSelectedTranscripts(new Set());
+        await saveTopics(sortedTopics);
+      }
+    } catch (error) {
+      console.error('[Frontend] Clustering error:', error);
+      if (error instanceof Error && error.name === 'AbortError') {
+        setClusterError('Request timed out.');
+      } else {
+        setClusterError(error instanceof Error ? error.message : 'Failed to cluster.');
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      setClustering(false);
+    }
+  };
+
   // Merge selected topics
   const handleMergeTopics = async () => {
     if (selectedTopics.size < 2) return;
@@ -451,6 +515,18 @@ export default function ConversationsDatePage() {
                     List View
                   </Button>
                 )}
+                {viewMode === 'list' && topics.length > 0 && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setViewMode('topics')}
+                  >
+                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    </svg>
+                    Topics View
+                  </Button>
+                )}
                 {/* Merge button - show when 2+ topics selected */}
                 {selectedTopics.size >= 2 && (
                   <Button
@@ -464,18 +540,32 @@ export default function ConversationsDatePage() {
                     Merge ({selectedTopics.size})
                   </Button>
                 )}
-                {/* Cluster New - only when there are unclustered transcripts */}
-                {unclusteredTranscripts.length > 0 && (
+                {/* Cluster Selected - when transcripts are selected */}
+                {selectedTranscripts.size > 0 && (
                   <Button
                     size="sm"
-                    onClick={handleClusterNew}
+                    onClick={handleClusterSelected}
                     loading={clustering}
                     variant="primary"
                   >
                     <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+                    </svg>
+                    {clustering ? 'Clustering...' : `Cluster Selected (${selectedTranscripts.size})`}
+                  </Button>
+                )}
+                {/* Cluster All New - only when there are unclustered transcripts and none selected */}
+                {unclusteredTranscripts.length > 0 && selectedTranscripts.size === 0 && (
+                  <Button
+                    size="sm"
+                    onClick={handleClusterNew}
+                    loading={clustering}
+                    variant="secondary"
+                  >
+                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                     </svg>
-                    {clustering ? 'Clustering...' : `Cluster New (${unclusteredTranscripts.length})`}
+                    {clustering ? 'Clustering...' : `Cluster All (${unclusteredTranscripts.length})`}
                   </Button>
                 )}
                 {/* Initial cluster button - only when no clusters exist */}
@@ -508,8 +598,26 @@ export default function ConversationsDatePage() {
                     </div>
                     <div className="space-y-3">
                       {unclusteredTranscripts.map((transcription) => (
-                        <Card key={transcription.id} className="p-4 border-dashed border-gray-600">
-                          <div className="flex items-start justify-between">
+                        <Card
+                          key={transcription.id}
+                          className={`p-4 border-dashed ${selectedTranscripts.has(transcription.id) ? 'border-brand-primary ring-2 ring-brand-primary' : 'border-gray-600'}`}
+                        >
+                          <div className="flex items-start">
+                            {/* Selection checkbox */}
+                            <button
+                              onClick={() => toggleTranscriptSelection(transcription.id)}
+                              className={`mr-3 mt-1 w-5 h-5 rounded border-2 flex-shrink-0 flex items-center justify-center transition-colors ${
+                                selectedTranscripts.has(transcription.id)
+                                  ? 'bg-brand-primary border-brand-primary'
+                                  : 'border-gray-500 hover:border-gray-400'
+                              }`}
+                            >
+                              {selectedTranscripts.has(transcription.id) && (
+                                <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </button>
                             <div className="flex-1">
                               <div className="flex items-center space-x-2 mb-2">
                                 <span className="text-sm text-gray-400">
