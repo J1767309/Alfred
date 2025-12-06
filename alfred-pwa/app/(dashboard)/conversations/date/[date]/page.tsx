@@ -37,6 +37,7 @@ export default function ConversationsDatePage() {
   const [clusterError, setClusterError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'topics'>('list');
   const [expandedTopic, setExpandedTopic] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const supabase = createClient();
 
   const dateParam = params.date as string;
@@ -45,6 +46,13 @@ export default function ConversationsDatePage() {
   useEffect(() => {
     loadData();
   }, [dateParam]);
+
+  // Auto-cluster when we have transcriptions but no saved clusters
+  useEffect(() => {
+    if (!loading && transcriptions.length > 0 && topics.length === 0 && !clustering && viewMode === 'list') {
+      handleClusterTopics();
+    }
+  }, [loading, transcriptions.length, topics.length]);
 
   const loadData = async () => {
     setLoading(true);
@@ -79,13 +87,16 @@ export default function ConversationsDatePage() {
       if (transcriptionsResult.error) throw transcriptionsResult.error;
       setTranscriptions(transcriptionsResult.data || []);
 
-      // If we have saved clusters, load them automatically
+      // If we have saved clusters, load them automatically (sorted by most recent first)
       if (clustersResult.data?.topics) {
-        setTopics(clustersResult.data.topics as TopicCluster[]);
+        const sortedTopics = [...(clustersResult.data.topics as TopicCluster[])].sort(
+          (a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
+        );
+        setTopics(sortedTopics);
         setViewMode('topics');
       } else {
         setTopics([]);
-        setViewMode('list');
+        // Will trigger auto-clustering via useEffect if we have transcriptions
       }
     } catch (error) {
       console.error('Error loading data:', error);
@@ -131,7 +142,11 @@ export default function ConversationsDatePage() {
       }
 
       if (data.topics && data.topics.length > 0) {
-        setTopics(data.topics);
+        // Sort topics by most recent first
+        const sortedTopics = [...data.topics].sort(
+          (a: TopicCluster, b: TopicCluster) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
+        );
+        setTopics(sortedTopics);
         setViewMode('topics');
       } else {
         setClusterError('No topics could be identified from the conversations.');
@@ -158,6 +173,20 @@ export default function ConversationsDatePage() {
 
   const toggleTopicExpand = (topicId: string) => {
     setExpandedTopic(expandedTopic === topicId ? null : topicId);
+  };
+
+  const handleCopyTranscripts = async () => {
+    // Sort by date ascending for chronological reading
+    const sorted = [...transcriptions].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+    const text = sorted
+      .map(t => `[${formatDate(t.date, 'h:mm a')}] ${t.transcription}`)
+      .join('\n\n');
+
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -231,6 +260,27 @@ export default function ConversationsDatePage() {
                 {transcriptions.length} conversation{transcriptions.length !== 1 ? 's' : ''}
               </div>
               <div className="flex items-center space-x-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleCopyTranscripts}
+                >
+                  {copied ? (
+                    <>
+                      <svg className="w-4 h-4 mr-1.5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      Copied!
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      </svg>
+                      Copy All
+                    </>
+                  )}
+                </Button>
                 {viewMode === 'topics' && (
                   <Button
                     variant="secondary"
