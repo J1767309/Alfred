@@ -6,7 +6,7 @@
     },
     {
       "path": "/api/cron/cluster-topics",
-      "schedule": "0 * * * *"
+      "schedule": "0 22 * * *"
     }
   ]
 }
