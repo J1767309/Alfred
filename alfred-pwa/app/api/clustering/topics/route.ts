@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { generateSummary } from '@/lib/claude/client';
 import { getCentralDayBoundariesUTC } from '@/lib/utils/dates';
+import { getAboutMe, getEntities } from '@/lib/claude/context';
+import { Entity } from '@/types/database';
 
 export const maxDuration = 120; // 2 minutes for large datasets
 
@@ -27,7 +29,14 @@ interface TopicCluster {
 
 const CLUSTERING_PROMPT = `You are an AI that analyzes voice transcriptions and groups them into coherent topic clusters.
 
-Given a list of transcriptions with timestamps, your task is to:
+You will be provided with:
+1. Context about the user (who they are, their background)
+2. A list of known entities (people, places, organizations) with their relationships to the user
+3. Voice transcriptions with timestamps
+
+Use the user context and entities to better understand and interpret the transcriptions. When you recognize names or places mentioned, use the entity information to provide more meaningful summaries.
+
+Your task is to:
 1. Identify distinct conversations or topics
 2. Group related transcriptions together (they may be fragments of the same conversation)
 3. Generate a descriptive title for each topic
@@ -50,6 +59,7 @@ Important guidelines:
 - Create separate topics for distinctly different subjects
 - Make titles engaging and descriptive like a news headline
 - Sections should capture the main themes discussed
+- Use entity context to correctly identify who is being discussed (e.g., if "Mike" is mentioned and there's an entity "Mike - Brother", reference him appropriately)
 
 Respond ONLY with the JSON array, no other text.`;
 
@@ -72,6 +82,17 @@ export async function POST(request: NextRequest) {
     if (!date && !transcriptIds) {
       return NextResponse.json({ error: 'Missing date or transcriptIds' }, { status: 400 });
     }
+
+    // Fetch user context (about me and entities) in parallel
+    const [aboutMe, entities] = await Promise.all([
+      getAboutMe(user.id),
+      getEntities(user.id),
+    ]);
+
+    console.log('[Clustering] User context loaded:', {
+      hasAboutMe: !!aboutMe,
+      entityCount: entities.length
+    });
 
     // Fetch transcriptions
     let query = supabase
@@ -129,13 +150,37 @@ export async function POST(request: NextRequest) {
       text: t.transcription?.slice(0, textLimit) || '',
     }));
 
-    const userPrompt = `Here are ${transcriptions.length} voice transcriptions to analyze and cluster by topic:
+    // Build context section
+    const contextParts: string[] = [];
+
+    if (aboutMe) {
+      contextParts.push(`## About the User\n${aboutMe}`);
+    }
+
+    if (entities.length > 0) {
+      const entityList = entities.map((e: Entity) => {
+        const parts = [`- ${e.name} (${e.type})`];
+        if (e.relationship) parts[0] += `: ${e.relationship}`;
+        if (e.notes) parts.push(`  Notes: ${e.notes}`);
+        if (e.context) parts.push(`  Context: ${e.context}`);
+        return parts.join('\n');
+      }).join('\n');
+      contextParts.push(`## Known Entities\n${entityList}`);
+    }
+
+    const contextSection = contextParts.length > 0
+      ? `# User Context\n\n${contextParts.join('\n\n')}\n\n---\n\n`
+      : '';
+
+    const userPrompt = `${contextSection}# Transcriptions
+
+Here are ${transcriptions.length} voice transcriptions to analyze and cluster by topic:
 
 ${transcriptsForAnalysis.map(t =>
   `[${t.index}] ${t.time}: ${t.text}${t.text.length >= textLimit ? '...' : ''} (ID:${t.id})`
 ).join('\n')}
 
-Analyze these transcriptions and group them into topic clusters. Return the JSON array of clusters.`;
+Analyze these transcriptions and group them into topic clusters. Use the user context and entity information above to better understand who and what is being discussed. Return the JSON array of clusters.`;
 
     // Call Claude to cluster - use more tokens for larger datasets
     const maxTokens = transcriptCount > 100 ? 8192 : 4096;
