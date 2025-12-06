@@ -75,25 +75,28 @@ export function getCentralDayBoundariesUTC(dateStr: string): { startUTC: string;
   // dateStr is in format 'yyyy-MM-dd'
   const [year, month, day] = dateStr.split('-').map(Number);
 
-  // Get timezone offset for this date (handles DST automatically)
-  const tzOffset = getTimezoneOffset(TIMEZONE, new Date(year, month - 1, day));
+  // Create a reference point at noon UTC on this date to determine DST
+  const noonUTC = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
 
-  // Create UTC dates that correspond to Central Time boundaries
-  // When it's midnight Central, add the offset to get UTC
-  const startUTCDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0) + tzOffset);
-  const endUTCDate = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999) + tzOffset);
+  // Get what hour it is in Central Time when it's noon UTC
+  const centralHourStr = formatInTimeZone(noonUTC, TIMEZONE, 'H');
+  const centralHour = parseInt(centralHourStr, 10);
+
+  // Calculate offset: if noon UTC = 6am Central, offset is 6 hours
+  // CST (winter): offset = 6, CDT (summer): offset = 5
+  const offsetHours = 12 - centralHour;
+
+  // Start of day in Central = add offset hours to midnight UTC
+  const startUTC = new Date(Date.UTC(year, month - 1, day, offsetHours, 0, 0, 0));
+
+  // End of day in Central = 23:59:59.999 Central = add offset to that
+  // If offset is 6, then 23:59 Central = 05:59 UTC next day
+  const endUTC = new Date(Date.UTC(year, month - 1, day, 23 + offsetHours, 59, 59, 999));
 
   return {
-    startUTC: startUTCDate.toISOString(),
-    endUTC: endUTCDate.toISOString(),
+    startUTC: startUTC.toISOString(),
+    endUTC: endUTC.toISOString(),
   };
-}
-
-// Helper to get timezone offset in milliseconds
-function getTimezoneOffset(timeZone: string, date: Date): number {
-  const utcDate = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
-  const tzDate = new Date(date.toLocaleString('en-US', { timeZone }));
-  return (utcDate.getTime() - tzDate.getTime());
 }
 
 export function groupByDate<T extends { created_at?: string; conversation_date?: string; summary_date?: string; date?: string }>(
