@@ -183,7 +183,18 @@ ${transcriptsForAnalysis.map(t =>
 Analyze these transcriptions and group them into topic clusters. Use the user context and entity information above to better understand who and what is being discussed. Return the JSON array of clusters.`;
 
     // Call Claude to cluster - use more tokens for larger datasets
-    const maxTokens = transcriptCount > 100 ? 8192 : 4096;
+    // Need enough tokens to generate detailed clusters with summaries and sections
+    let maxTokens: number;
+    if (transcriptCount > 100) {
+      maxTokens = 16384;
+    } else if (transcriptCount > 50) {
+      maxTokens = 12288;
+    } else if (transcriptCount > 20) {
+      maxTokens = 8192;
+    } else {
+      maxTokens = 4096;
+    }
+
     console.log('[Clustering] Calling Claude with', {
       transcriptCount,
       textLimit,
@@ -200,13 +211,25 @@ Analyze these transcriptions and group them into topic clusters. Use the user co
       // Try to extract JSON from the response
       const jsonMatch = response.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
-        topics = JSON.parse(jsonMatch[0]);
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          topics = parsed;
+          console.log('[Clustering] Successfully parsed', topics.length, 'topics');
+        } else {
+          console.error('[Clustering] Parsed result is empty or not an array');
+        }
+      } else {
+        console.error('[Clustering] No JSON array found in response');
+        console.error('[Clustering] Response preview:', response.substring(0, 500));
       }
     } catch (parseError) {
-      console.error('Failed to parse clustering response:', parseError);
-      console.error('Response was:', response);
+      console.error('[Clustering] Failed to parse clustering response:', parseError);
+      console.error('[Clustering] Response preview:', response.substring(0, 500));
+    }
 
-      // Fallback: create a single topic with all transcripts
+    // Only use fallback if we truly have no topics
+    if (topics.length === 0) {
+      console.log('[Clustering] Using fallback single topic');
       topics = [{
         id: 'topic_1',
         title: 'Daily Conversations',
