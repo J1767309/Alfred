@@ -47,17 +47,26 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  // Helper to get today's date in YYYY-MM-DD format
+  const getTodayPath = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `/conversations/date/${year}-${month}-${day}`;
+  };
+
   // Redirect authenticated users away from login
   if (user && request.nextUrl.pathname === '/login') {
     const url = request.nextUrl.clone();
-    url.pathname = '/conversations';
+    url.pathname = getTodayPath();
     return NextResponse.redirect(url);
   }
 
-  // Redirect root to conversations for authenticated users
+  // Redirect root to today's conversations for authenticated users
   if (user && request.nextUrl.pathname === '/') {
     const url = request.nextUrl.clone();
-    url.pathname = '/conversations';
+    url.pathname = getTodayPath();
     return NextResponse.redirect(url);
   }
 
