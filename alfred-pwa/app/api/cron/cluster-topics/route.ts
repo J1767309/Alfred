@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/server';
 import { generateSummary } from '@/lib/claude/client';
-import { format } from 'date-fns';
+import { formatInTimeZone } from 'date-fns-tz';
+import { getCentralDayBoundariesUTC } from '@/lib/utils/dates';
+
+const TIMEZONE = 'America/Chicago';
 
 export const maxDuration = 60;
 
@@ -56,20 +59,17 @@ export async function GET(request: NextRequest) {
 
     const supabase = await createServiceClient();
 
-    // Get today's date
-    const today = new Date();
-    const todayStr = format(today, 'yyyy-MM-dd');
-    const startOfDay = new Date(today);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(today);
-    endOfDay.setHours(23, 59, 59, 999);
+    // Get today's date in Central Time
+    const todayStr = formatInTimeZone(new Date(), TIMEZONE, 'yyyy-MM-dd');
+    // Get UTC boundaries for today in Central Time
+    const { startUTC, endUTC } = getCentralDayBoundariesUTC(todayStr);
 
     // Get all users with transcriptions today
     const { data: usersWithTranscriptions } = await supabase
       .from('transcriptions')
       .select('user_id')
-      .gte('created_at', startOfDay.toISOString())
-      .lte('created_at', endOfDay.toISOString())
+      .gte('created_at', startUTC)
+      .lte('created_at', endUTC)
       .not('user_id', 'is', null);
 
     if (!usersWithTranscriptions || usersWithTranscriptions.length === 0) {
@@ -83,13 +83,13 @@ export async function GET(request: NextRequest) {
 
     for (const userId of userIds) {
       try {
-        // Get user's transcriptions for today
+        // Get user's transcriptions for today (using Central Time boundaries)
         const { data: transcriptions, error: fetchError } = await supabase
           .from('transcriptions')
           .select('id, date, transcription, created_at')
           .eq('user_id', userId)
-          .gte('created_at', startOfDay.toISOString())
-          .lte('created_at', endOfDay.toISOString())
+          .gte('created_at', startUTC)
+          .lte('created_at', endUTC)
           .order('date', { ascending: true });
 
         if (fetchError) throw fetchError;

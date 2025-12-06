@@ -7,7 +7,7 @@ import { Transcription } from '@/types/database';
 import Header from '@/components/layout/Header';
 import Button from '@/components/ui/Button';
 import Card from '@/components/ui/Card';
-import { formatDate, getDayLabel } from '@/lib/utils/dates';
+import { formatDate, getDayLabel, getCentralDayBoundariesUTC } from '@/lib/utils/dates';
 import { parseISO, addDays, subDays, format } from 'date-fns';
 
 interface TopicSection {
@@ -34,6 +34,7 @@ export default function ConversationsDatePage() {
   const [topics, setTopics] = useState<TopicCluster[]>([]);
   const [loading, setLoading] = useState(true);
   const [clustering, setClustering] = useState(false);
+  const [clusterError, setClusterError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'topics'>('list');
   const [expandedTopic, setExpandedTopic] = useState<string | null>(null);
   const supabase = createClient();
@@ -51,10 +52,8 @@ export default function ConversationsDatePage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const startOfDay = new Date(dateParam);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(dateParam);
-      endOfDay.setHours(23, 59, 59, 999);
+      // Get Central Time day boundaries in UTC for database query
+      const { startUTC, endUTC } = getCentralDayBoundariesUTC(dateParam);
 
       // Load transcriptions and saved clusters in parallel
       const [transcriptionsResult, clustersResult] = await Promise.all([
@@ -62,8 +61,8 @@ export default function ConversationsDatePage() {
           .from('transcriptions')
           .select('*')
           .or(`user_id.eq.${user.id},user_id.is.null`)
-          .gte('created_at', startOfDay.toISOString())
-          .lte('created_at', endOfDay.toISOString())
+          .gte('created_at', startUTC)
+          .lte('created_at', endUTC)
           .order('date', { ascending: false }),
         supabase
           .from('topic_clusters')
@@ -95,6 +94,7 @@ export default function ConversationsDatePage() {
     if (transcriptions.length === 0) return;
 
     setClustering(true);
+    setClusterError(null);
     try {
       const response = await fetch('/api/clustering/topics', {
         method: 'POST',
@@ -102,13 +102,21 @@ export default function ConversationsDatePage() {
         body: JSON.stringify({ date: dateParam }),
       });
 
-      if (!response.ok) throw new Error('Failed to cluster topics');
-
       const data = await response.json();
-      setTopics(data.topics || []);
-      setViewMode('topics');
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to cluster topics');
+      }
+
+      if (data.topics && data.topics.length > 0) {
+        setTopics(data.topics);
+        setViewMode('topics');
+      } else {
+        setClusterError('No topics could be identified from the conversations.');
+      }
     } catch (error) {
       console.error('Error clustering topics:', error);
+      setClusterError(error instanceof Error ? error.message : 'Failed to cluster topics. Please try again.');
     } finally {
       setClustering(false);
     }
@@ -183,6 +191,13 @@ export default function ConversationsDatePage() {
           </div>
         ) : (
           <div className="max-w-3xl space-y-4">
+            {/* Error message */}
+            {clusterError && (
+              <div className="mb-4 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
+                <p className="text-red-400 text-sm">{clusterError}</p>
+              </div>
+            )}
+
             {/* Action bar */}
             <div className="flex items-center justify-between mb-6">
               <div className="text-sm text-gray-500">

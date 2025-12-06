@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 import { generateSummary } from '@/lib/claude/client';
+import { getCentralDayBoundariesUTC } from '@/lib/utils/dates';
 
-export const maxDuration = 60;
+export const maxDuration = 120; // 2 minutes for large datasets
 
 interface TranscriptInput {
   id: string;
@@ -77,15 +78,12 @@ export async function POST(request: NextRequest) {
     if (transcriptIds && transcriptIds.length > 0) {
       query = query.in('id', transcriptIds);
     } else if (date) {
-      // Get transcriptions for the specific date
-      const startOfDay = new Date(date);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(date);
-      endOfDay.setHours(23, 59, 59, 999);
+      // Get transcriptions for the specific date using Central Time boundaries
+      const { startUTC, endUTC } = getCentralDayBoundariesUTC(date);
 
       query = query
-        .gte('created_at', startOfDay.toISOString())
-        .lte('created_at', endOfDay.toISOString());
+        .gte('created_at', startUTC)
+        .lte('created_at', endUTC);
     }
 
     const { data: transcriptions, error } = await query;
@@ -96,28 +94,40 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ topics: [] });
     }
 
-    // Prepare transcripts for Claude
+    // Dynamically adjust text length based on transcript count to stay within token limits
+    // Claude has ~100k token context, but we need room for the response
+    // Rough estimate: 1 token ≈ 4 chars, so aim for ~60k chars max input
+    const transcriptCount = transcriptions.length;
+    let textLimit: number;
+    if (transcriptCount <= 50) {
+      textLimit = 400; // ~20k chars
+    } else if (transcriptCount <= 100) {
+      textLimit = 250; // ~25k chars
+    } else if (transcriptCount <= 200) {
+      textLimit = 150; // ~30k chars
+    } else {
+      textLimit = 100; // ~40k chars for 400+ transcripts
+    }
+
+    // Prepare transcripts for Claude with dynamic text limit
     const transcriptsForAnalysis = transcriptions.map((t, index) => ({
       index: index + 1,
       id: t.id,
       time: t.date,
-      text: t.transcription?.slice(0, 500) || '', // Limit each transcript to prevent token overflow
+      text: t.transcription?.slice(0, textLimit) || '',
     }));
 
     const userPrompt = `Here are ${transcriptions.length} voice transcriptions to analyze and cluster by topic:
 
 ${transcriptsForAnalysis.map(t =>
-  `[Transcript ${t.index}]
-ID: ${t.id}
-Time: ${t.time}
-Text: ${t.text}
----`
-).join('\n\n')}
+  `[${t.index}] ${t.time}: ${t.text}${t.text.length >= textLimit ? '...' : ''} (ID:${t.id})`
+).join('\n')}
 
 Analyze these transcriptions and group them into topic clusters. Return the JSON array of clusters.`;
 
-    // Call Claude to cluster
-    const response = await generateSummary(CLUSTERING_PROMPT, userPrompt, 4096);
+    // Call Claude to cluster - use more tokens for larger datasets
+    const maxTokens = transcriptCount > 100 ? 8192 : 4096;
+    const response = await generateSummary(CLUSTERING_PROMPT, userPrompt, maxTokens);
 
     // Parse the response
     let topics: TopicCluster[] = [];
@@ -166,8 +176,9 @@ Analyze these transcriptions and group them into topic clusters. Return the JSON
     return NextResponse.json({ topics: enrichedTopics });
   } catch (error) {
     console.error('Clustering error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json(
-      { error: 'Failed to cluster transcriptions' },
+      { error: `Failed to cluster transcriptions: ${errorMessage}` },
       { status: 500 }
     );
   }

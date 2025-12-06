@@ -1,4 +1,4 @@
-import { format, formatDistanceToNow, parseISO, startOfDay, endOfDay } from 'date-fns';
+import { formatDistanceToNow, parseISO, startOfDay, endOfDay } from 'date-fns';
 import { toZonedTime, formatInTimeZone } from 'date-fns-tz';
 
 const TIMEZONE = 'America/Chicago'; // Central Time
@@ -47,21 +47,58 @@ export function formatTimeAgo(date: string | Date): string {
 
 export function getDayLabel(date: string | Date): string {
   const d = typeof date === 'string' ? parseISO(date) : date;
-  const today = startOfDay(new Date());
-  const dateDay = startOfDay(d);
 
-  const diffDays = Math.floor((today.getTime() - dateDay.getTime()) / (1000 * 60 * 60 * 24));
+  // Get today's date in Central Time
+  const todayStr = formatInTimeZone(new Date(), TIMEZONE, 'yyyy-MM-dd');
+
+  // Get the date string in Central Time
+  const dateStr = formatInTimeZone(d, TIMEZONE, 'yyyy-MM-dd');
+
+  // Parse as dates for comparison
+  const todayDate = new Date(todayStr);
+  const inputDate = new Date(dateStr);
+
+  const diffDays = Math.floor((todayDate.getTime() - inputDate.getTime()) / (1000 * 60 * 60 * 24));
 
   if (diffDays === 0) return 'Today';
   if (diffDays === 1) return 'Yesterday';
-  if (diffDays < 7) return format(d, 'EEEE');
+  if (diffDays < 7) return formatInTimeZone(d, TIMEZONE, 'EEEE');
 
-  return format(d, 'MMM d, yyyy');
+  return formatInTimeZone(d, TIMEZONE, 'MMM d, yyyy');
 }
 
-export function groupByDate<T extends { created_at?: string; conversation_date?: string; summary_date?: string }>(
+/**
+ * Get UTC boundaries for a Central Time date
+ * Returns start and end of day in Central Time, converted to UTC ISO strings
+ */
+export function getCentralDayBoundariesUTC(dateStr: string): { startUTC: string; endUTC: string } {
+  // dateStr is in format 'yyyy-MM-dd'
+  const [year, month, day] = dateStr.split('-').map(Number);
+
+  // Get timezone offset for this date (handles DST automatically)
+  const tzOffset = getTimezoneOffset(TIMEZONE, new Date(year, month - 1, day));
+
+  // Create UTC dates that correspond to Central Time boundaries
+  // When it's midnight Central, add the offset to get UTC
+  const startUTCDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0) + tzOffset);
+  const endUTCDate = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999) + tzOffset);
+
+  return {
+    startUTC: startUTCDate.toISOString(),
+    endUTC: endUTCDate.toISOString(),
+  };
+}
+
+// Helper to get timezone offset in milliseconds
+function getTimezoneOffset(timeZone: string, date: Date): number {
+  const utcDate = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
+  const tzDate = new Date(date.toLocaleString('en-US', { timeZone }));
+  return (utcDate.getTime() - tzDate.getTime());
+}
+
+export function groupByDate<T extends { created_at?: string; conversation_date?: string; summary_date?: string; date?: string }>(
   items: T[],
-  dateField: 'created_at' | 'conversation_date' | 'summary_date' = 'created_at'
+  dateField: 'created_at' | 'conversation_date' | 'summary_date' | 'date' = 'created_at'
 ): Map<string, T[]> {
   const groups = new Map<string, T[]>();
 
@@ -69,7 +106,8 @@ export function groupByDate<T extends { created_at?: string; conversation_date?:
     const dateValue = item[dateField];
     if (!dateValue) return;
 
-    const dateKey = format(parseISO(dateValue), 'yyyy-MM-dd');
+    // Use Central Time for date grouping
+    const dateKey = formatInTimeZone(parseISO(dateValue), TIMEZONE, 'yyyy-MM-dd');
     const existing = groups.get(dateKey) || [];
     existing.push(item);
     groups.set(dateKey, existing);
