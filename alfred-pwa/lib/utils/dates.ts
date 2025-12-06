@@ -1,31 +1,46 @@
-import { formatDistanceToNow, parseISO, startOfDay, endOfDay, format } from 'date-fns';
+import { formatDistanceToNow, parseISO, startOfDay, endOfDay } from 'date-fns';
 import { toZonedTime, formatInTimeZone } from 'date-fns-tz';
 
 const TIMEZONE = 'America/Chicago'; // Central Time
+// Use UTC for formatting since DB stores Central Time values labeled as UTC
+const DISPLAY_TIMEZONE = 'UTC';
 
 /**
- * Parse a date string, handling both ISO format and Supabase timestamptz format
- * Supabase returns timestamps like '2025-12-06 04:26:01.528276+00' (space instead of T)
+ * Normalize a date string from the database for parsing.
  *
- * IMPORTANT: Our database stores dates in Central Time (not UTC).
- * So '2025-12-05 23:08:08+00' actually means 11:08 PM Central on Dec 5.
- * We strip the timezone info to treat it as a local Central Time.
+ * IMPORTANT: Our database stores Central Time values with a +00 suffix.
+ * For example, '2025-12-05 23:08:08+00' actually means 11:08 PM Central on Dec 5.
+ * The +00 is a LIE - the value is actually Central Time.
+ *
+ * We normalize to ISO format and keep as UTC for consistent display.
  */
-function parseTimestamp(dateStr: string): Date {
+function normalizeTimestamp(dateStr: string): string {
   // Replace space with T for ISO compatibility
   let normalized = dateStr.includes('T') ? dateStr : dateStr.replace(' ', 'T');
 
-  // Remove timezone suffix (+00, +00:00, Z) to treat as local time
-  // Our DB stores Central Time, not actual UTC
-  normalized = normalized.replace(/[+-]\d{2}(:\d{2})?$/, '').replace(/Z$/, '');
+  // Ensure we have a timezone suffix for consistent parsing
+  // If no timezone, add Z (UTC) since our DB values are labeled as UTC
+  if (!normalized.match(/[+-]\d{2}(:\d{2})?$/) && !normalized.endsWith('Z')) {
+    normalized += 'Z';
+  }
 
-  return parseISO(normalized);
+  // Normalize +00 to Z for consistency
+  normalized = normalized.replace(/\+00(:00)?$/, 'Z');
+
+  return normalized;
+}
+
+/**
+ * Parse a date string from the database into a Date object.
+ */
+function parseTimestamp(dateStr: string): Date {
+  return parseISO(normalizeTimestamp(dateStr));
 }
 
 export function formatDate(date: string | Date, formatStr: string = 'PPP'): string {
   const d = typeof date === 'string' ? parseTimestamp(date) : date;
-  // No timezone conversion needed - DB already stores Central Time
-  return format(d, formatStr);
+  // Format in UTC since DB stores Central Time values as UTC
+  return formatInTimeZone(d, DISPLAY_TIMEZONE, formatStr);
 }
 
 export function formatRelative(date: string | Date): string {
@@ -35,8 +50,8 @@ export function formatRelative(date: string | Date): string {
 
 export function formatDateCentral(date: string | Date, formatStr: string = 'PPP'): string {
   const d = typeof date === 'string' ? parseTimestamp(date) : date;
-  // DB stores Central Time, so just format directly
-  return format(d, formatStr);
+  // Format in UTC since DB stores Central Time values labeled as UTC
+  return formatInTimeZone(d, DISPLAY_TIMEZONE, formatStr);
 }
 
 export function getTodayCentral(): Date {
@@ -69,11 +84,11 @@ export function formatTimeAgo(date: string | Date): string {
 export function getDayLabel(date: string | Date): string {
   const d = typeof date === 'string' ? parseTimestamp(date) : date;
 
-  // Get today's date in Central Time
+  // Get today's date in Central Time (actual current time)
   const todayStr = formatInTimeZone(new Date(), TIMEZONE, 'yyyy-MM-dd');
 
-  // Get the date string (DB already stores Central Time)
-  const dateStr = format(d, 'yyyy-MM-dd');
+  // Get the date string from DB value (format in UTC since DB stores Central as UTC)
+  const dateStr = formatInTimeZone(d, DISPLAY_TIMEZONE, 'yyyy-MM-dd');
 
   // Parse as dates for comparison
   const todayDate = new Date(todayStr);
@@ -83,9 +98,9 @@ export function getDayLabel(date: string | Date): string {
 
   if (diffDays === 0) return 'Today';
   if (diffDays === 1) return 'Yesterday';
-  if (diffDays < 7) return format(d, 'EEEE');
+  if (diffDays < 7) return formatInTimeZone(d, DISPLAY_TIMEZONE, 'EEEE');
 
-  return format(d, 'MMM d, yyyy');
+  return formatInTimeZone(d, DISPLAY_TIMEZONE, 'MMM d, yyyy');
 }
 
 /**
@@ -116,9 +131,9 @@ export function groupByDate<T extends { created_at?: string; conversation_date?:
     const dateValue = item[dateField];
     if (!dateValue) return;
 
-    // Parse the timestamp - DB stores Central Time directly
+    // Parse the timestamp and format in UTC (since DB stores Central Time as UTC)
     const parsed = parseTimestamp(dateValue);
-    const dateKey = format(parsed, 'yyyy-MM-dd');
+    const dateKey = formatInTimeZone(parsed, DISPLAY_TIMEZONE, 'yyyy-MM-dd');
 
     // Debug: log first item's conversion
     if (groups.size === 0) {
