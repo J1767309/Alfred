@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Transcription } from '@/types/database';
@@ -175,6 +175,15 @@ export default function ConversationsDatePage() {
     setExpandedTopic(expandedTopic === topicId ? null : topicId);
   };
 
+  // Find transcripts that aren't in any cluster
+  const unclusteredTranscripts = useMemo(() => {
+    if (topics.length === 0) return [];
+    const clusteredIds = new Set(topics.flatMap(t => t.transcriptIds));
+    return transcriptions
+      .filter(t => !clusteredIds.has(t.id))
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [topics, transcriptions]);
+
   const handleCopyTranscripts = async () => {
     // Sort by date ascending for chronological reading
     const sorted = [...transcriptions].sort(
@@ -310,6 +319,38 @@ export default function ConversationsDatePage() {
             {/* Topics View */}
             {viewMode === 'topics' && topics.length > 0 && (
               <div className="space-y-4">
+                {/* Unclustered transcripts at the top */}
+                {unclusteredTranscripts.length > 0 && (
+                  <div className="mb-6">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-semibold text-gray-400">
+                        Unclustered ({unclusteredTranscripts.length})
+                      </h3>
+                    </div>
+                    <div className="space-y-3">
+                      {unclusteredTranscripts.map((transcription) => (
+                        <Card key={transcription.id} className="p-4 border-dashed border-gray-600">
+                          <div className="flex items-start justify-between">
+                            <div className="flex-1">
+                              <div className="flex items-center space-x-2 mb-2">
+                                <span className="text-sm text-gray-400">
+                                  {formatDate(transcription.date, 'h:mm a')}
+                                </span>
+                                <span className="text-xs px-2 py-0.5 bg-yellow-500/10 text-yellow-400 rounded">
+                                  New
+                                </span>
+                              </div>
+                              <p className="text-gray-300 text-sm whitespace-pre-wrap">
+                                {transcription.transcription}
+                              </p>
+                            </div>
+                          </div>
+                        </Card>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {topics.map((topic) => (
                   <Card key={topic.id} className="overflow-hidden">
                     {/* Topic Header - Always visible */}
