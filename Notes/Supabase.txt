@@ -1,0 +1,18 @@
+
+https://fieldlabsinc.github.io/docs/#/webhooks
+
+Password: 
+L5u#3XK^X4!s
+
+Project URL: https://ghhtygvtarfglofajukn.supabase.co
+
+Project API Key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdoaHR5Z3Z0YXJmZ2xvZmFqdWtuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQ1NDUwMjUsImV4cCI6MjA4MDEyMTAyNX0.0RqztfgGlnZVNDTlS5Qap6s_5savPLd7SSeYpFEIC-A
+
+
+Javascript
+
+import { createClient } from '@supabase/supabase-js'
+
+const supabaseUrl = 'https://ghhtygvtarfglofajukn.supabase.co'
+const supabaseKey = process.env.SUPABASE_KEY
+const supabase = createClient(supabaseUrl, supabaseKey)
