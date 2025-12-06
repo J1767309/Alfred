@@ -54,15 +54,20 @@ Important guidelines:
 Respond ONLY with the JSON array, no other text.`;
 
 export async function POST(request: NextRequest) {
+  console.log('[Clustering] Starting topic clustering request');
+
   try {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
 
     if (!user) {
+      console.log('[Clustering] Unauthorized - no user');
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { date, transcriptIds } = await request.json();
+    const body = await request.json();
+    const { date, transcriptIds } = body;
+    console.log('[Clustering] Request params:', { date, transcriptIdsCount: transcriptIds?.length });
 
     if (!date && !transcriptIds) {
       return NextResponse.json({ error: 'Missing date or transcriptIds' }, { status: 400 });
@@ -80,15 +85,22 @@ export async function POST(request: NextRequest) {
     } else if (date) {
       // Get transcriptions for the specific date using Central Time boundaries
       const { startUTC, endUTC } = getCentralDayBoundariesUTC(date);
+      console.log('[Clustering] Date boundaries for', date, ':', { startUTC, endUTC });
 
+      // Query by 'date' field (when transcription occurred) not 'created_at'
       query = query
-        .gte('created_at', startUTC)
-        .lte('created_at', endUTC);
+        .gte('date', startUTC)
+        .lte('date', endUTC);
     }
 
     const { data: transcriptions, error } = await query;
 
-    if (error) throw error;
+    if (error) {
+      console.error('[Clustering] Supabase query error:', error);
+      throw error;
+    }
+
+    console.log('[Clustering] Found transcriptions:', transcriptions?.length || 0);
 
     if (!transcriptions || transcriptions.length === 0) {
       return NextResponse.json({ topics: [] });
@@ -127,7 +139,15 @@ Analyze these transcriptions and group them into topic clusters. Return the JSON
 
     // Call Claude to cluster - use more tokens for larger datasets
     const maxTokens = transcriptCount > 100 ? 8192 : 4096;
+    console.log('[Clustering] Calling Claude with', {
+      transcriptCount,
+      textLimit,
+      maxTokens,
+      promptLength: userPrompt.length
+    });
+
     const response = await generateSummary(CLUSTERING_PROMPT, userPrompt, maxTokens);
+    console.log('[Clustering] Claude response received, length:', response.length);
 
     // Parse the response
     let topics: TopicCluster[] = [];

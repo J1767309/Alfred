@@ -3,18 +3,28 @@ import { toZonedTime, formatInTimeZone } from 'date-fns-tz';
 
 const TIMEZONE = 'America/Chicago'; // Central Time
 
+/**
+ * Parse a date string, handling both ISO format and Supabase timestamptz format
+ * Supabase returns timestamps like '2025-12-06 04:26:01.528276+00' (space instead of T)
+ */
+function parseTimestamp(dateStr: string): Date {
+  // Replace space with T for ISO compatibility if needed
+  const normalized = dateStr.includes('T') ? dateStr : dateStr.replace(' ', 'T');
+  return parseISO(normalized);
+}
+
 export function formatDate(date: string | Date, formatStr: string = 'PPP'): string {
-  const d = typeof date === 'string' ? parseISO(date) : date;
+  const d = typeof date === 'string' ? parseTimestamp(date) : date;
   return formatInTimeZone(d, TIMEZONE, formatStr);
 }
 
 export function formatRelative(date: string | Date): string {
-  const d = typeof date === 'string' ? parseISO(date) : date;
+  const d = typeof date === 'string' ? parseTimestamp(date) : date;
   return formatDistanceToNow(d, { addSuffix: true });
 }
 
 export function formatDateCentral(date: string | Date, formatStr: string = 'PPP'): string {
-  const d = typeof date === 'string' ? parseISO(date) : date;
+  const d = typeof date === 'string' ? parseTimestamp(date) : date;
   return formatInTimeZone(d, TIMEZONE, formatStr);
 }
 
@@ -33,7 +43,7 @@ export function getEndOfDayCentral(date: Date): Date {
 }
 
 export function formatTimeAgo(date: string | Date): string {
-  const d = typeof date === 'string' ? parseISO(date) : date;
+  const d = typeof date === 'string' ? parseTimestamp(date) : date;
   const now = new Date();
   const diffInSeconds = Math.floor((now.getTime() - d.getTime()) / 1000);
 
@@ -46,7 +56,7 @@ export function formatTimeAgo(date: string | Date): string {
 }
 
 export function getDayLabel(date: string | Date): string {
-  const d = typeof date === 'string' ? parseISO(date) : date;
+  const d = typeof date === 'string' ? parseTimestamp(date) : date;
 
   // Get today's date in Central Time
   const todayStr = formatInTimeZone(new Date(), TIMEZONE, 'yyyy-MM-dd');
@@ -109,8 +119,19 @@ export function groupByDate<T extends { created_at?: string; conversation_date?:
     const dateValue = item[dateField];
     if (!dateValue) return;
 
-    // Use Central Time for date grouping
-    const dateKey = formatInTimeZone(parseISO(dateValue), TIMEZONE, 'yyyy-MM-dd');
+    // Parse the timestamp and convert to Central Time for grouping
+    const parsed = parseTimestamp(dateValue);
+    const dateKey = formatInTimeZone(parsed, TIMEZONE, 'yyyy-MM-dd');
+
+    // Debug: log first item's conversion
+    if (groups.size === 0) {
+      console.log('[groupByDate] Sample conversion:', {
+        input: dateValue,
+        parsed: parsed.toISOString(),
+        centralDateKey: dateKey
+      });
+    }
+
     const existing = groups.get(dateKey) || [];
     existing.push(item);
     groups.set(dateKey, existing);

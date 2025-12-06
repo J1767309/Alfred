@@ -64,12 +64,12 @@ export async function GET(request: NextRequest) {
     // Get UTC boundaries for today in Central Time
     const { startUTC, endUTC } = getCentralDayBoundariesUTC(todayStr);
 
-    // Get all users with transcriptions today
+    // Get all users with transcriptions today (query by 'date' field)
     const { data: usersWithTranscriptions } = await supabase
       .from('transcriptions')
       .select('user_id')
-      .gte('created_at', startUTC)
-      .lte('created_at', endUTC)
+      .gte('date', startUTC)
+      .lte('date', endUTC)
       .not('user_id', 'is', null);
 
     if (!usersWithTranscriptions || usersWithTranscriptions.length === 0) {
@@ -83,13 +83,13 @@ export async function GET(request: NextRequest) {
 
     for (const userId of userIds) {
       try {
-        // Get user's transcriptions for today (using Central Time boundaries)
+        // Get user's transcriptions for today (using Central Time boundaries, query by 'date')
         const { data: transcriptions, error: fetchError } = await supabase
           .from('transcriptions')
           .select('id, date, transcription, created_at')
           .eq('user_id', userId)
-          .gte('created_at', startUTC)
-          .lte('created_at', endUTC)
+          .gte('date', startUTC)
+          .lte('date', endUTC)
           .order('date', { ascending: true });
 
         if (fetchError) throw fetchError;

@@ -55,14 +55,18 @@ export default function ConversationsDatePage() {
       // Get Central Time day boundaries in UTC for database query
       const { startUTC, endUTC } = getCentralDayBoundariesUTC(dateParam);
 
+      // Debug: log the boundaries
+      console.log('[DatePage] Querying for date:', dateParam, 'UTC boundaries:', { startUTC, endUTC });
+
       // Load transcriptions and saved clusters in parallel
+      // Query by 'date' field (when transcription occurred) not 'created_at' (when inserted)
       const [transcriptionsResult, clustersResult] = await Promise.all([
         supabase
           .from('transcriptions')
           .select('*')
           .or(`user_id.eq.${user.id},user_id.is.null`)
-          .gte('created_at', startUTC)
-          .lte('created_at', endUTC)
+          .gte('date', startUTC)
+          .lte('date', endUTC)
           .order('date', { ascending: false }),
         supabase
           .from('topic_clusters')
@@ -95,17 +99,35 @@ export default function ConversationsDatePage() {
 
     setClustering(true);
     setClusterError(null);
+
+    // Use AbortController for timeout handling
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 180000); // 3 minute timeout
+
     try {
+      console.log('[Frontend] Starting clustering for date:', dateParam);
+
       const response = await fetch('/api/clustering/topics', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date: dateParam }),
+        signal: controller.signal,
       });
 
-      const data = await response.json();
+      clearTimeout(timeoutId);
+
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseError) {
+        console.error('[Frontend] Failed to parse response:', parseError);
+        throw new Error('Failed to parse server response');
+      }
+
+      console.log('[Frontend] Response status:', response.status, 'topics:', data.topics?.length);
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to cluster topics');
+        throw new Error(data.error || `Server error: ${response.status}`);
       }
 
       if (data.topics && data.topics.length > 0) {
@@ -115,9 +137,14 @@ export default function ConversationsDatePage() {
         setClusterError('No topics could be identified from the conversations.');
       }
     } catch (error) {
-      console.error('Error clustering topics:', error);
-      setClusterError(error instanceof Error ? error.message : 'Failed to cluster topics. Please try again.');
+      console.error('[Frontend] Clustering error:', error);
+      if (error instanceof Error && error.name === 'AbortError') {
+        setClusterError('Request timed out. The server is taking too long to process. Please try again.');
+      } else {
+        setClusterError(error instanceof Error ? error.message : 'Failed to cluster topics. Please try again.');
+      }
     } finally {
+      clearTimeout(timeoutId);
       setClustering(false);
     }
   };

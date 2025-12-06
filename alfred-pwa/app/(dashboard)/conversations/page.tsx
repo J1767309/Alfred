@@ -49,8 +49,18 @@ export default function ConversationsPage() {
 
   // Group transcriptions by date and compute stats
   const dateStats = useMemo(() => {
-    const grouped = groupByDate(transcriptions, 'created_at');
+    // Use 'date' field for grouping since that's when the transcription occurred
+    const grouped = groupByDate(transcriptions, 'date');
     const stats: DateStats[] = [];
+
+    // Debug logging
+    if (transcriptions.length > 0) {
+      console.log('[Conversations] Sample transcription:', {
+        date: transcriptions[0].date,
+        created_at: transcriptions[0].created_at,
+      });
+      console.log('[Conversations] Grouped dates:', Array.from(grouped.keys()));
+    }
 
     grouped.forEach((dayTranscriptions, dateKey) => {
       // Create a preview from the first few transcriptions
