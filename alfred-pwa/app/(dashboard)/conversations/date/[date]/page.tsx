@@ -41,6 +41,8 @@ export default function ConversationsDatePage() {
   const [copiedTopicId, setCopiedTopicId] = useState<string | null>(null);
   const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
   const [selectedTranscripts, setSelectedTranscripts] = useState<Set<string>>(new Set());
+  const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
   const supabase = createClient();
 
   const dateParam = params.date as string;
@@ -296,6 +298,34 @@ export default function ConversationsDatePage() {
       return next;
     });
     await saveTopics(newTopics);
+  };
+
+  // Start editing a topic title
+  const startEditingTopic = (topicId: string, currentTitle: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingTopicId(topicId);
+    setEditingTitle(currentTitle);
+  };
+
+  // Save edited topic title
+  const saveTopicTitle = async (topicId: string) => {
+    if (!editingTitle.trim()) {
+      setEditingTopicId(null);
+      return;
+    }
+
+    const newTopics = topics.map(t =>
+      t.id === topicId ? { ...t, title: editingTitle.trim() } : t
+    );
+    setTopics(newTopics);
+    setEditingTopicId(null);
+    await saveTopics(newTopics);
+  };
+
+  // Cancel editing
+  const cancelEditing = () => {
+    setEditingTopicId(null);
+    setEditingTitle('');
   };
 
   // Toggle topic selection for merge
@@ -748,9 +778,43 @@ export default function ConversationsDatePage() {
                                 {formatDate(topic.startTime, 'h:mm a')}
                               </span>
                             </div>
-                            <h3 className="text-lg font-semibold text-white mb-2">
-                              {topic.title}
-                            </h3>
+                            {editingTopicId === topic.id ? (
+                              <div className="flex items-center gap-2 mb-2" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="text"
+                                  value={editingTitle}
+                                  onChange={(e) => setEditingTitle(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') saveTopicTitle(topic.id);
+                                    if (e.key === 'Escape') cancelEditing();
+                                  }}
+                                  className="flex-1 bg-dark-hover border border-dark-border rounded px-2 py-1 text-lg font-semibold text-white focus:outline-none focus:border-brand-primary"
+                                  autoFocus
+                                />
+                                <button
+                                  onClick={() => saveTopicTitle(topic.id)}
+                                  className="p-1.5 rounded bg-brand-primary/20 hover:bg-brand-primary/30 transition-colors"
+                                  title="Save"
+                                >
+                                  <svg className="w-4 h-4 text-brand-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                </button>
+                                <button
+                                  onClick={cancelEditing}
+                                  className="p-1.5 rounded hover:bg-dark-hover transition-colors"
+                                  title="Cancel"
+                                >
+                                  <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                  </svg>
+                                </button>
+                              </div>
+                            ) : (
+                              <h3 className="text-lg font-semibold text-white mb-2">
+                                {topic.title}
+                              </h3>
+                            )}
                             <div className="flex items-center gap-2 mb-3">
                               <span className="px-2.5 py-1 bg-brand-primary/10 text-brand-primary text-xs rounded-full">
                                 {topic.category}
@@ -772,6 +836,16 @@ export default function ConversationsDatePage() {
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                                   </svg>
                                 )}
+                              </button>
+                              {/* Edit button */}
+                              <button
+                                onClick={(e) => startEditingTopic(topic.id, topic.title, e)}
+                                className="p-1.5 rounded hover:bg-dark-hover transition-colors"
+                                title="Rename cluster"
+                              >
+                                <svg className="w-4 h-4 text-gray-400 hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
                               </button>
                               {/* Delete button */}
                               <button
