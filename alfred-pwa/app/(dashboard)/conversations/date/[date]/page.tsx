@@ -300,6 +300,30 @@ export default function ConversationsDatePage() {
     await saveTopics(newTopics);
   };
 
+  // Delete a transcript (permanently from database)
+  const handleDeleteTranscript = async (transcriptId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    try {
+      const { error } = await supabase
+        .from('transcriptions')
+        .delete()
+        .eq('id', transcriptId);
+
+      if (error) throw error;
+
+      // Remove from local state
+      setTranscriptions(prev => prev.filter(t => t.id !== transcriptId));
+      setSelectedTranscripts(prev => {
+        const next = new Set(prev);
+        next.delete(transcriptId);
+        return next;
+      });
+    } catch (error) {
+      console.error('Error deleting transcript:', error);
+    }
+  };
+
   // Start editing a topic title
   const startEditingTopic = (topicId: string, currentTitle: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -725,13 +749,25 @@ export default function ConversationsDatePage() {
                               </span>
                             </button>
                             <div className="flex-1">
-                              <div className="flex items-center space-x-2 mb-2">
-                                <span className="text-sm text-gray-400">
-                                  {formatDate(transcription.date, 'h:mm a')}
-                                </span>
-                                <span className="text-xs px-2 py-0.5 bg-yellow-500/10 text-yellow-400 rounded">
-                                  New
-                                </span>
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center space-x-2">
+                                  <span className="text-sm text-gray-400">
+                                    {formatDate(transcription.date, 'h:mm a')}
+                                  </span>
+                                  <span className="text-xs px-2 py-0.5 bg-yellow-500/10 text-yellow-400 rounded">
+                                    New
+                                  </span>
+                                </div>
+                                {/* Delete transcript button */}
+                                <button
+                                  onClick={(e) => handleDeleteTranscript(transcription.id, e)}
+                                  className="p-1.5 rounded hover:bg-red-500/20 transition-colors"
+                                  title="Delete transcript"
+                                >
+                                  <svg className="w-4 h-4 text-gray-400 hover:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                  </svg>
+                                </button>
                               </div>
                               <p className="text-gray-300 text-sm whitespace-pre-wrap">
                                 {transcription.transcription}
