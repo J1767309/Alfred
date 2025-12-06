@@ -10,7 +10,7 @@ export default function Card({ children, className = '', onClick, hover = false 
     <div
       className={`bg-dark-card border border-dark-border rounded-xl ${
         hover ? 'hover:border-dark-hover cursor-pointer transition' : ''
-      } ${onClick ? 'cursor-pointer' : ''} ${className}`}
+      } ${onClick ? 'cursor-pointer touch-manipulation active:opacity-90' : ''} ${className}`}
       onClick={onClick}
     >
       {children}

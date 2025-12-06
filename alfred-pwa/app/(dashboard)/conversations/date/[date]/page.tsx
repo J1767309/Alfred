@@ -375,12 +375,69 @@ export default function ConversationsDatePage() {
     }
   };
 
+  // Re-cluster all transcripts (undo merges)
+  const handleReclusterAll = async () => {
+    if (!confirm('This will delete all current topic clusters and re-analyze all transcripts. Continue?')) {
+      return;
+    }
+
+    setClustering(true);
+    setClusterError(null);
+    setTopics([]); // Clear existing topics
+    setSelectedTopics(new Set());
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 180000);
+
+    try {
+      const response = await fetch('/api/clustering/topics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: dateParam }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || `Server error: ${response.status}`);
+      }
+
+      if (data.topics && data.topics.length > 0) {
+        const sortedTopics = [...data.topics].sort(
+          (a: TopicCluster, b: TopicCluster) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
+        );
+        setTopics(sortedTopics);
+        setViewMode('topics');
+      }
+    } catch (error) {
+      console.error('[Frontend] Re-clustering error:', error);
+      if (error instanceof Error && error.name === 'AbortError') {
+        setClusterError('Request timed out.');
+      } else {
+        setClusterError(error instanceof Error ? error.message : 'Failed to re-cluster.');
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      setClustering(false);
+    }
+  };
+
   // Merge selected topics
   const handleMergeTopics = async () => {
     if (selectedTopics.size < 2) return;
 
     const toMerge = topics.filter(t => selectedTopics.has(t.id));
     const remaining = topics.filter(t => !selectedTopics.has(t.id));
+
+    // Show confirmation with topic names
+    const topicNames = toMerge.map(t => `• ${t.title}`).join('\n');
+    if (!confirm(`Merge these ${toMerge.length} topics?\n\n${topicNames}`)) {
+      return;
+    }
+
+    console.log('[Merge] Merging topics:', toMerge.map(t => ({ id: t.id, title: t.title })));
 
     // Combine all transcripts and IDs
     const allTranscripts = toMerge.flatMap(t => t.transcripts || []);
@@ -477,11 +534,11 @@ export default function ConversationsDatePage() {
             )}
 
             {/* Action bar */}
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
               <div className="text-sm text-gray-500">
                 {transcriptions.length} conversation{transcriptions.length !== 1 ? 's' : ''}
               </div>
-              <div className="flex items-center space-x-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button
                   variant="secondary"
                   size="sm"
@@ -582,6 +639,20 @@ export default function ConversationsDatePage() {
                     {clustering ? 'Clustering...' : 'Cluster by Topic'}
                   </Button>
                 )}
+                {/* Re-cluster All button - when clusters exist */}
+                {topics.length > 0 && selectedTopics.size === 0 && selectedTranscripts.size === 0 && (
+                  <Button
+                    size="sm"
+                    onClick={handleReclusterAll}
+                    loading={clustering}
+                    variant="secondary"
+                  >
+                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    {clustering ? 'Re-clustering...' : 'Re-cluster All'}
+                  </Button>
+                )}
               </div>
             </div>
 
@@ -603,20 +674,25 @@ export default function ConversationsDatePage() {
                           className={`p-4 border-dashed ${selectedTranscripts.has(transcription.id) ? 'border-brand-primary ring-2 ring-brand-primary' : 'border-gray-600'}`}
                         >
                           <div className="flex items-start">
-                            {/* Selection checkbox */}
+                            {/* Selection checkbox - larger touch target for mobile */}
                             <button
-                              onClick={() => toggleTranscriptSelection(transcription.id)}
-                              className={`mr-3 mt-1 w-5 h-5 rounded border-2 flex-shrink-0 flex items-center justify-center transition-colors ${
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleTranscriptSelection(transcription.id);
+                              }}
+                              className={`-ml-2 -mt-1 p-2 flex-shrink-0 flex items-center justify-center transition-colors touch-manipulation`}
+                            >
+                              <span className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
                                 selectedTranscripts.has(transcription.id)
                                   ? 'bg-brand-primary border-brand-primary'
-                                  : 'border-gray-500 hover:border-gray-400'
-                              }`}
-                            >
-                              {selectedTranscripts.has(transcription.id) && (
-                                <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                                </svg>
-                              )}
+                                  : 'border-gray-500'
+                              }`}>
+                                {selectedTranscripts.has(transcription.id) && (
+                                  <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                )}
+                              </span>
                             </button>
                             <div className="flex-1">
                               <div className="flex items-center space-x-2 mb-2">
@@ -639,30 +715,32 @@ export default function ConversationsDatePage() {
                 )}
 
                 {topics.map((topic) => (
-                  <Card key={topic.id} className={`overflow-hidden ${selectedTopics.has(topic.id) ? 'ring-2 ring-brand-primary' : ''}`}>
+                  <Card key={topic.id} className={`overflow-hidden ${selectedTopics.has(topic.id) ? 'ring-2 ring-brand-primary bg-brand-primary/5' : ''}`}>
                     {/* Topic Header - Always visible */}
-                    <div className="flex items-start p-5">
-                      {/* Selection checkbox */}
+                    <div
+                      className="flex items-start p-5 cursor-pointer touch-manipulation"
+                      onClick={() => toggleTopicExpand(topic.id)}
+                    >
+                      {/* Selection checkbox - larger touch target for mobile */}
                       <button
                         onClick={(e) => toggleTopicSelection(topic.id, e)}
-                        className={`mr-3 mt-1 w-5 h-5 rounded border-2 flex-shrink-0 flex items-center justify-center transition-colors ${
+                        className="-ml-2 -mt-1 p-2 flex-shrink-0 flex items-center justify-center transition-colors touch-manipulation"
+                      >
+                        <span className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
                           selectedTopics.has(topic.id)
                             ? 'bg-brand-primary border-brand-primary'
-                            : 'border-gray-500 hover:border-gray-400'
-                        }`}
-                      >
-                        {selectedTopics.has(topic.id) && (
-                          <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                          </svg>
-                        )}
+                            : 'border-gray-500'
+                        }`}>
+                          {selectedTopics.has(topic.id) && (
+                            <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                        </span>
                       </button>
 
-                      {/* Expandable content */}
-                      <button
-                        onClick={() => toggleTopicExpand(topic.id)}
-                        className="flex-1 text-left"
-                      >
+                      {/* Topic content */}
+                      <div className="flex-1 text-left ml-1">
                         <div className="flex items-start justify-between gap-4">
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-2">
@@ -719,7 +797,7 @@ export default function ConversationsDatePage() {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                           </svg>
                         </div>
-                      </button>
+                      </div>
                     </div>
 
                     {/* Expanded Content */}
