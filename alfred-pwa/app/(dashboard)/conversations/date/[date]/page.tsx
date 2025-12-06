@@ -39,6 +39,7 @@ export default function ConversationsDatePage() {
   const [expandedTopic, setExpandedTopic] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [copiedTopicId, setCopiedTopicId] = useState<string | null>(null);
+  const [selectedTopics, setSelectedTopics] = useState<Set<string>>(new Set());
   const supabase = createClient();
 
   const dateParam = params.date as string;
@@ -213,6 +214,139 @@ export default function ConversationsDatePage() {
     setTimeout(() => setCopiedTopicId(null), 2000);
   };
 
+  // Save topics to database
+  const saveTopics = async (newTopics: TopicCluster[]) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      await supabase.from('topic_clusters').upsert({
+        user_id: user.id,
+        cluster_date: dateParam,
+        topics: newTopics,
+        transcription_count: transcriptions.length,
+        updated_at: new Date().toISOString(),
+      }, {
+        onConflict: 'user_id,cluster_date',
+      });
+    } catch (error) {
+      console.error('Error saving topics:', error);
+    }
+  };
+
+  // Cluster only new (unclustered) transcripts
+  const handleClusterNew = async () => {
+    if (unclusteredTranscripts.length === 0) return;
+
+    setClustering(true);
+    setClusterError(null);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 180000);
+
+    try {
+      const response = await fetch('/api/clustering/topics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: dateParam,
+          transcriptIds: unclusteredTranscripts.map(t => t.id)
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || `Server error: ${response.status}`);
+      }
+
+      if (data.topics && data.topics.length > 0) {
+        // Merge new topics with existing ones
+        const allTopics = [...topics, ...data.topics];
+        const sortedTopics = allTopics.sort(
+          (a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
+        );
+        setTopics(sortedTopics);
+        await saveTopics(sortedTopics);
+      }
+    } catch (error) {
+      console.error('[Frontend] Clustering error:', error);
+      if (error instanceof Error && error.name === 'AbortError') {
+        setClusterError('Request timed out.');
+      } else {
+        setClusterError(error instanceof Error ? error.message : 'Failed to cluster.');
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      setClustering(false);
+    }
+  };
+
+  // Delete a topic
+  const handleDeleteTopic = async (topicId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const newTopics = topics.filter(t => t.id !== topicId);
+    setTopics(newTopics);
+    setSelectedTopics(prev => {
+      const next = new Set(prev);
+      next.delete(topicId);
+      return next;
+    });
+    await saveTopics(newTopics);
+  };
+
+  // Toggle topic selection for merge
+  const toggleTopicSelection = (topicId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedTopics(prev => {
+      const next = new Set(prev);
+      if (next.has(topicId)) {
+        next.delete(topicId);
+      } else {
+        next.add(topicId);
+      }
+      return next;
+    });
+  };
+
+  // Merge selected topics
+  const handleMergeTopics = async () => {
+    if (selectedTopics.size < 2) return;
+
+    const toMerge = topics.filter(t => selectedTopics.has(t.id));
+    const remaining = topics.filter(t => !selectedTopics.has(t.id));
+
+    // Combine all transcripts and IDs
+    const allTranscripts = toMerge.flatMap(t => t.transcripts || []);
+    const allTranscriptIds = toMerge.flatMap(t => t.transcriptIds);
+
+    // Sort transcripts by date
+    allTranscripts.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    // Create merged topic using first topic's title/category or combine them
+    const mergedTopic: TopicCluster = {
+      id: `merged_${Date.now()}`,
+      title: toMerge.map(t => t.title).join(' + '),
+      category: toMerge[0].category,
+      summary: toMerge.map(t => t.summary).join(' '),
+      sections: toMerge.flatMap(t => t.sections || []),
+      transcriptIds: Array.from(new Set(allTranscriptIds)),
+      transcripts: allTranscripts,
+      startTime: allTranscripts[0]?.date || toMerge[0].startTime,
+      endTime: allTranscripts[allTranscripts.length - 1]?.date || toMerge[toMerge.length - 1].endTime,
+    };
+
+    const newTopics = [...remaining, mergedTopic].sort(
+      (a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
+    );
+
+    setTopics(newTopics);
+    setSelectedTopics(new Set());
+    await saveTopics(newTopics);
+  };
+
   return (
     <>
       <Header
@@ -317,17 +451,47 @@ export default function ConversationsDatePage() {
                     List View
                   </Button>
                 )}
-                <Button
-                  size="sm"
-                  onClick={handleClusterTopics}
-                  loading={clustering}
-                  variant={topics.length > 0 ? 'secondary' : 'primary'}
-                >
-                  <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
-                  </svg>
-                  {clustering ? 'Clustering...' : topics.length > 0 ? 'Re-cluster' : 'Cluster by Topic'}
-                </Button>
+                {/* Merge button - show when 2+ topics selected */}
+                {selectedTopics.size >= 2 && (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={handleMergeTopics}
+                  >
+                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                    </svg>
+                    Merge ({selectedTopics.size})
+                  </Button>
+                )}
+                {/* Cluster New - only when there are unclustered transcripts */}
+                {unclusteredTranscripts.length > 0 && (
+                  <Button
+                    size="sm"
+                    onClick={handleClusterNew}
+                    loading={clustering}
+                    variant="primary"
+                  >
+                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    </svg>
+                    {clustering ? 'Clustering...' : `Cluster New (${unclusteredTranscripts.length})`}
+                  </Button>
+                )}
+                {/* Initial cluster button - only when no clusters exist */}
+                {topics.length === 0 && unclusteredTranscripts.length === 0 && (
+                  <Button
+                    size="sm"
+                    onClick={handleClusterTopics}
+                    loading={clustering}
+                    variant="primary"
+                  >
+                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+                    </svg>
+                    {clustering ? 'Clustering...' : 'Cluster by Topic'}
+                  </Button>
+                )}
               </div>
             </div>
 
@@ -367,59 +531,88 @@ export default function ConversationsDatePage() {
                 )}
 
                 {topics.map((topic) => (
-                  <Card key={topic.id} className="overflow-hidden">
+                  <Card key={topic.id} className={`overflow-hidden ${selectedTopics.has(topic.id) ? 'ring-2 ring-brand-primary' : ''}`}>
                     {/* Topic Header - Always visible */}
-                    <button
-                      onClick={() => toggleTopicExpand(topic.id)}
-                      className="w-full p-5 text-left hover:bg-dark-hover/50 transition-colors"
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className="text-xs text-gray-500">
-                              {formatDate(topic.startTime, 'h:mm a')}
-                            </span>
-                          </div>
-                          <h3 className="text-lg font-semibold text-white mb-2">
-                            {topic.title}
-                          </h3>
-                          <div className="flex items-center gap-2 mb-3">
-                            <span className="px-2.5 py-1 bg-brand-primary/10 text-brand-primary text-xs rounded-full">
-                              {topic.category}
-                            </span>
-                            <span className="text-xs text-gray-500">
-                              {topic.transcripts?.length || topic.transcriptIds.length} transcript{(topic.transcripts?.length || topic.transcriptIds.length) !== 1 ? 's' : ''}
-                            </span>
-                            <button
-                              onClick={(e) => handleCopyTopicTranscripts(topic, e)}
-                              className="ml-2 p-1.5 rounded hover:bg-dark-hover transition-colors"
-                              title="Copy transcripts"
-                            >
-                              {copiedTopicId === topic.id ? (
-                                <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    <div className="flex items-start p-5">
+                      {/* Selection checkbox */}
+                      <button
+                        onClick={(e) => toggleTopicSelection(topic.id, e)}
+                        className={`mr-3 mt-1 w-5 h-5 rounded border-2 flex-shrink-0 flex items-center justify-center transition-colors ${
+                          selectedTopics.has(topic.id)
+                            ? 'bg-brand-primary border-brand-primary'
+                            : 'border-gray-500 hover:border-gray-400'
+                        }`}
+                      >
+                        {selectedTopics.has(topic.id) && (
+                          <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                          </svg>
+                        )}
+                      </button>
+
+                      {/* Expandable content */}
+                      <button
+                        onClick={() => toggleTopicExpand(topic.id)}
+                        className="flex-1 text-left"
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-xs text-gray-500">
+                                {formatDate(topic.startTime, 'h:mm a')}
+                              </span>
+                            </div>
+                            <h3 className="text-lg font-semibold text-white mb-2">
+                              {topic.title}
+                            </h3>
+                            <div className="flex items-center gap-2 mb-3">
+                              <span className="px-2.5 py-1 bg-brand-primary/10 text-brand-primary text-xs rounded-full">
+                                {topic.category}
+                              </span>
+                              <span className="text-xs text-gray-500">
+                                {topic.transcripts?.length || topic.transcriptIds.length} transcript{(topic.transcripts?.length || topic.transcriptIds.length) !== 1 ? 's' : ''}
+                              </span>
+                              <button
+                                onClick={(e) => handleCopyTopicTranscripts(topic, e)}
+                                className="ml-2 p-1.5 rounded hover:bg-dark-hover transition-colors"
+                                title="Copy transcripts"
+                              >
+                                {copiedTopicId === topic.id ? (
+                                  <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                ) : (
+                                  <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                  </svg>
+                                )}
+                              </button>
+                              {/* Delete button */}
+                              <button
+                                onClick={(e) => handleDeleteTopic(topic.id, e)}
+                                className="p-1.5 rounded hover:bg-red-500/20 transition-colors"
+                                title="Delete cluster"
+                              >
+                                <svg className="w-4 h-4 text-gray-400 hover:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                                 </svg>
-                              ) : (
-                                <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                                </svg>
-                              )}
-                            </button>
+                              </button>
+                            </div>
+                            <p className="text-gray-400 text-sm">{topic.summary}</p>
                           </div>
-                          <p className="text-gray-400 text-sm">{topic.summary}</p>
-                        </div>
-                        <svg
-                          className={`w-5 h-5 text-gray-500 transition-transform flex-shrink-0 ${
-                            expandedTopic === topic.id ? 'rotate-180' : ''
-                          }`}
+                          <svg
+                            className={`w-5 h-5 text-gray-500 transition-transform flex-shrink-0 ${
+                              expandedTopic === topic.id ? 'rotate-180' : ''
+                            }`}
                           fill="none"
                           stroke="currentColor"
                           viewBox="0 0 24 24"
                         >
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                        </svg>
-                      </div>
-                    </button>
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </div>
+                      </button>
+                    </div>
 
                     {/* Expanded Content */}
                     {expandedTopic === topic.id && (
