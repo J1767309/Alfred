@@ -47,8 +47,6 @@ export default function ConversationsDatePage() {
 
   const loadData = async () => {
     setLoading(true);
-    setTopics([]);
-    setViewMode('list');
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -58,16 +56,34 @@ export default function ConversationsDatePage() {
       const endOfDay = new Date(dateParam);
       endOfDay.setHours(23, 59, 59, 999);
 
-      const { data, error } = await supabase
-        .from('transcriptions')
-        .select('*')
-        .or(`user_id.eq.${user.id},user_id.is.null`)
-        .gte('created_at', startOfDay.toISOString())
-        .lte('created_at', endOfDay.toISOString())
-        .order('date', { ascending: false });
+      // Load transcriptions and saved clusters in parallel
+      const [transcriptionsResult, clustersResult] = await Promise.all([
+        supabase
+          .from('transcriptions')
+          .select('*')
+          .or(`user_id.eq.${user.id},user_id.is.null`)
+          .gte('created_at', startOfDay.toISOString())
+          .lte('created_at', endOfDay.toISOString())
+          .order('date', { ascending: false }),
+        supabase
+          .from('topic_clusters')
+          .select('topics')
+          .eq('user_id', user.id)
+          .eq('cluster_date', dateParam)
+          .single()
+      ]);
 
-      if (error) throw error;
-      setTranscriptions(data || []);
+      if (transcriptionsResult.error) throw transcriptionsResult.error;
+      setTranscriptions(transcriptionsResult.data || []);
+
+      // If we have saved clusters, load them automatically
+      if (clustersResult.data?.topics) {
+        setTopics(clustersResult.data.topics as TopicCluster[]);
+        setViewMode('topics');
+      } else {
+        setTopics([]);
+        setViewMode('list');
+      }
     } catch (error) {
       console.error('Error loading data:', error);
     } finally {
@@ -189,12 +205,12 @@ export default function ConversationsDatePage() {
                   size="sm"
                   onClick={handleClusterTopics}
                   loading={clustering}
-                  disabled={viewMode === 'topics'}
+                  variant={topics.length > 0 ? 'secondary' : 'primary'}
                 >
                   <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
                   </svg>
-                  {clustering ? 'Clustering...' : 'Cluster by Topic'}
+                  {clustering ? 'Clustering...' : topics.length > 0 ? 'Re-cluster' : 'Cluster by Topic'}
                 </Button>
               </div>
             </div>

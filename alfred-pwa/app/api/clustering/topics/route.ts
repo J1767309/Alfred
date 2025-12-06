@@ -150,6 +150,19 @@ Analyze these transcriptions and group them into topic clusters. Return the JSON
       transcripts: transcriptions.filter(t => topic.transcriptIds.includes(t.id)),
     }));
 
+    // Save to database if we have a date
+    if (date) {
+      await supabase.from('topic_clusters').upsert({
+        user_id: user.id,
+        cluster_date: date,
+        topics: enrichedTopics,
+        transcription_count: transcriptions.length,
+        updated_at: new Date().toISOString(),
+      }, {
+        onConflict: 'user_id,cluster_date',
+      });
+    }
+
     return NextResponse.json({ topics: enrichedTopics });
   } catch (error) {
     console.error('Clustering error:', error);
