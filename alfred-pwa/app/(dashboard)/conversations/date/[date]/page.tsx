@@ -43,6 +43,8 @@ export default function ConversationsDatePage() {
   const [selectedTranscripts, setSelectedTranscripts] = useState<Set<string>>(new Set());
   const [editingTopicId, setEditingTopicId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
+  const [trashedIds, setTrashedIds] = useState<Set<string>>(new Set());
+  const [showTrash, setShowTrash] = useState(false);
   const supabase = createClient();
 
   const dateParam = params.date as string;
@@ -180,14 +182,14 @@ export default function ConversationsDatePage() {
     setExpandedTopic(expandedTopic === topicId ? null : topicId);
   };
 
-  // Find transcripts that aren't in any cluster
+  // Find transcripts that aren't in any cluster (excluding trashed)
   const unclusteredTranscripts = useMemo(() => {
     if (topics.length === 0) return [];
     const clusteredIds = new Set(topics.flatMap(t => t.transcriptIds));
     return transcriptions
-      .filter(t => !clusteredIds.has(t.id))
+      .filter(t => !clusteredIds.has(t.id) && !trashedIds.has(t.id))
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [topics, transcriptions]);
+  }, [topics, transcriptions, trashedIds]);
 
   const handleCopyTranscripts = async () => {
     // Sort by date ascending for chronological reading
@@ -300,29 +302,59 @@ export default function ConversationsDatePage() {
     await saveTopics(newTopics);
   };
 
-  // Delete a transcript (permanently from database)
-  const handleDeleteTranscript = async (transcriptId: string, e: React.MouseEvent) => {
+  // Move transcript to trash (session-only, clears on refresh)
+  const handleDeleteTranscript = (transcriptId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    setTrashedIds(prev => {
+      const next = new Set(Array.from(prev));
+      next.add(transcriptId);
+      return next;
+    });
+    setSelectedTranscripts(prev => {
+      const next = new Set(prev);
+      next.delete(transcriptId);
+      return next;
+    });
+  };
+
+  // Restore transcript from trash
+  const handleRestoreTranscript = (transcriptId: string) => {
+    setTrashedIds(prev => {
+      const next = new Set(prev);
+      next.delete(transcriptId);
+      return next;
+    });
+  };
+
+  // Permanently delete all trashed items
+  const handleEmptyTrash = async () => {
+    if (trashedIds.size === 0) return;
+
+    if (!confirm(`Permanently delete ${trashedIds.size} transcript${trashedIds.size !== 1 ? 's' : ''}? This cannot be undone.`)) {
+      return;
+    }
 
     try {
       const { error } = await supabase
         .from('transcriptions')
         .delete()
-        .eq('id', transcriptId);
+        .in('id', Array.from(trashedIds));
 
       if (error) throw error;
 
       // Remove from local state
-      setTranscriptions(prev => prev.filter(t => t.id !== transcriptId));
-      setSelectedTranscripts(prev => {
-        const next = new Set(prev);
-        next.delete(transcriptId);
-        return next;
-      });
+      setTranscriptions(prev => prev.filter(t => !trashedIds.has(t.id)));
+      setTrashedIds(new Set());
+      setShowTrash(false);
     } catch (error) {
-      console.error('Error deleting transcript:', error);
+      console.error('Error permanently deleting transcripts:', error);
     }
   };
+
+  // Get trashed transcripts
+  const trashedTranscripts = useMemo(() => {
+    return transcriptions.filter(t => trashedIds.has(t.id));
+  }, [transcriptions, trashedIds]);
 
   // Start editing a topic title
   const startEditingTopic = (topicId: string, currentTitle: string, e: React.MouseEvent) => {
@@ -707,6 +739,19 @@ export default function ConversationsDatePage() {
                     {clustering ? 'Re-clustering...' : 'Re-cluster All'}
                   </Button>
                 )}
+                {/* Trash button - show when there are trashed items */}
+                {trashedIds.size > 0 && (
+                  <Button
+                    size="sm"
+                    onClick={() => setShowTrash(true)}
+                    variant="secondary"
+                  >
+                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                    Trash ({trashedIds.size})
+                  </Button>
+                )}
               </div>
             </div>
 
@@ -987,6 +1032,96 @@ export default function ConversationsDatePage() {
           </div>
         )}
       </div>
+
+      {/* Trash Modal */}
+      {showTrash && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-dark-card border border-dark-border rounded-xl max-w-2xl w-full max-h-[80vh] flex flex-col">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 border-b border-dark-border">
+              <div className="flex items-center gap-2">
+                <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                <h2 className="text-lg font-semibold text-white">
+                  Trash ({trashedTranscripts.length})
+                </h2>
+              </div>
+              <button
+                onClick={() => setShowTrash(false)}
+                className="p-2 rounded hover:bg-dark-hover transition-colors"
+              >
+                <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-auto p-4 space-y-3">
+              {trashedTranscripts.length === 0 ? (
+                <p className="text-gray-400 text-center py-8">Trash is empty</p>
+              ) : (
+                trashedTranscripts.map((transcript) => (
+                  <div
+                    key={transcript.id}
+                    className="p-3 bg-dark-hover/50 rounded-lg border border-dark-border"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1">
+                        <span className="text-xs text-gray-500 block mb-1">
+                          {formatDate(transcript.date, 'h:mm a')}
+                        </span>
+                        <p className="text-sm text-gray-300 whitespace-pre-wrap line-clamp-3">
+                          {transcript.transcription}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleRestoreTranscript(transcript.id)}
+                        className="flex-shrink-0 p-2 rounded bg-brand-primary/10 hover:bg-brand-primary/20 transition-colors"
+                        title="Restore"
+                      >
+                        <svg className="w-4 h-4 text-brand-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-between p-4 border-t border-dark-border">
+              <p className="text-xs text-gray-500">
+                Trash clears when you refresh the page
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setShowTrash(false)}
+                >
+                  Close
+                </Button>
+                {trashedTranscripts.length > 0 && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={handleEmptyTrash}
+                    className="bg-red-600 hover:bg-red-700"
+                  >
+                    <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                    Delete All Permanently
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
