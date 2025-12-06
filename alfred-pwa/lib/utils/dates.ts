@@ -1,4 +1,4 @@
-import { formatDistanceToNow, parseISO, startOfDay, endOfDay } from 'date-fns';
+import { formatDistanceToNow, parseISO, startOfDay, endOfDay, format } from 'date-fns';
 import { toZonedTime, formatInTimeZone } from 'date-fns-tz';
 
 const TIMEZONE = 'America/Chicago'; // Central Time
@@ -6,16 +6,26 @@ const TIMEZONE = 'America/Chicago'; // Central Time
 /**
  * Parse a date string, handling both ISO format and Supabase timestamptz format
  * Supabase returns timestamps like '2025-12-06 04:26:01.528276+00' (space instead of T)
+ *
+ * IMPORTANT: Our database stores dates in Central Time (not UTC).
+ * So '2025-12-05 23:08:08+00' actually means 11:08 PM Central on Dec 5.
+ * We strip the timezone info to treat it as a local Central Time.
  */
 function parseTimestamp(dateStr: string): Date {
-  // Replace space with T for ISO compatibility if needed
-  const normalized = dateStr.includes('T') ? dateStr : dateStr.replace(' ', 'T');
+  // Replace space with T for ISO compatibility
+  let normalized = dateStr.includes('T') ? dateStr : dateStr.replace(' ', 'T');
+
+  // Remove timezone suffix (+00, +00:00, Z) to treat as local time
+  // Our DB stores Central Time, not actual UTC
+  normalized = normalized.replace(/[+-]\d{2}(:\d{2})?$/, '').replace(/Z$/, '');
+
   return parseISO(normalized);
 }
 
 export function formatDate(date: string | Date, formatStr: string = 'PPP'): string {
   const d = typeof date === 'string' ? parseTimestamp(date) : date;
-  return formatInTimeZone(d, TIMEZONE, formatStr);
+  // No timezone conversion needed - DB already stores Central Time
+  return format(d, formatStr);
 }
 
 export function formatRelative(date: string | Date): string {
@@ -25,7 +35,8 @@ export function formatRelative(date: string | Date): string {
 
 export function formatDateCentral(date: string | Date, formatStr: string = 'PPP'): string {
   const d = typeof date === 'string' ? parseTimestamp(date) : date;
-  return formatInTimeZone(d, TIMEZONE, formatStr);
+  // DB stores Central Time, so just format directly
+  return format(d, formatStr);
 }
 
 export function getTodayCentral(): Date {
@@ -61,8 +72,8 @@ export function getDayLabel(date: string | Date): string {
   // Get today's date in Central Time
   const todayStr = formatInTimeZone(new Date(), TIMEZONE, 'yyyy-MM-dd');
 
-  // Get the date string in Central Time
-  const dateStr = formatInTimeZone(d, TIMEZONE, 'yyyy-MM-dd');
+  // Get the date string (DB already stores Central Time)
+  const dateStr = format(d, 'yyyy-MM-dd');
 
   // Parse as dates for comparison
   const todayDate = new Date(todayStr);
@@ -72,41 +83,27 @@ export function getDayLabel(date: string | Date): string {
 
   if (diffDays === 0) return 'Today';
   if (diffDays === 1) return 'Yesterday';
-  if (diffDays < 7) return formatInTimeZone(d, TIMEZONE, 'EEEE');
+  if (diffDays < 7) return format(d, 'EEEE');
 
-  return formatInTimeZone(d, TIMEZONE, 'MMM d, yyyy');
+  return format(d, 'MMM d, yyyy');
 }
 
 /**
- * Get UTC boundaries for a Central Time date
- * Returns start and end of day in Central Time, converted to UTC ISO strings
+ * Get date boundaries for querying transcriptions
+ * Since DB stores Central Time directly, we just need start/end of that day
  */
-export function getCentralDayBoundariesUTC(dateStr: string): { startUTC: string; endUTC: string } {
+export function getCentralDayBoundaries(dateStr: string): { start: string; end: string } {
   // dateStr is in format 'yyyy-MM-dd'
-  const [year, month, day] = dateStr.split('-').map(Number);
-
-  // Create a reference point at noon UTC on this date to determine DST
-  const noonUTC = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-
-  // Get what hour it is in Central Time when it's noon UTC
-  const centralHourStr = formatInTimeZone(noonUTC, TIMEZONE, 'H');
-  const centralHour = parseInt(centralHourStr, 10);
-
-  // Calculate offset: if noon UTC = 6am Central, offset is 6 hours
-  // CST (winter): offset = 6, CDT (summer): offset = 5
-  const offsetHours = 12 - centralHour;
-
-  // Start of day in Central = add offset hours to midnight UTC
-  const startUTC = new Date(Date.UTC(year, month - 1, day, offsetHours, 0, 0, 0));
-
-  // End of day in Central = 23:59:59.999 Central = add offset to that
-  // If offset is 6, then 23:59 Central = 05:59 UTC next day
-  const endUTC = new Date(Date.UTC(year, month - 1, day, 23 + offsetHours, 59, 59, 999));
-
   return {
-    startUTC: startUTC.toISOString(),
-    endUTC: endUTC.toISOString(),
+    start: `${dateStr}T00:00:00.000`,
+    end: `${dateStr}T23:59:59.999`,
   };
+}
+
+// Keep old function name for compatibility but redirect to new one
+export function getCentralDayBoundariesUTC(dateStr: string): { startUTC: string; endUTC: string } {
+  const { start, end } = getCentralDayBoundaries(dateStr);
+  return { startUTC: start, endUTC: end };
 }
 
 export function groupByDate<T extends { created_at?: string; conversation_date?: string; summary_date?: string; date?: string }>(
@@ -119,16 +116,15 @@ export function groupByDate<T extends { created_at?: string; conversation_date?:
     const dateValue = item[dateField];
     if (!dateValue) return;
 
-    // Parse the timestamp and convert to Central Time for grouping
+    // Parse the timestamp - DB stores Central Time directly
     const parsed = parseTimestamp(dateValue);
-    const dateKey = formatInTimeZone(parsed, TIMEZONE, 'yyyy-MM-dd');
+    const dateKey = format(parsed, 'yyyy-MM-dd');
 
     // Debug: log first item's conversion
     if (groups.size === 0) {
-      console.log('[groupByDate] Sample conversion:', {
+      console.log('[groupByDate] Sample:', {
         input: dateValue,
-        parsed: parsed.toISOString(),
-        centralDateKey: dateKey
+        dateKey: dateKey
       });
     }
 

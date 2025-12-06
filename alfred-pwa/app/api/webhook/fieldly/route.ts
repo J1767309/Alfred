@@ -1,5 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 import { NextRequest, NextResponse } from 'next/server';
+import { formatInTimeZone } from 'date-fns-tz';
+
+const TIMEZONE = 'America/Chicago';
 
 // Create a Supabase client for webhook (no cookies needed)
 const supabase = createClient(
@@ -21,13 +24,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Store the transcription in Supabase
-    // The date is stored as-is (UTC). Display functions convert to Central Time.
-    // PostgreSQL timestamptz handles timezone normalization automatically.
+    // Convert UTC timestamp to Central Time for storage
+    // This ensures the date column shows the correct LOCAL date (Dec 5, not Dec 6)
+    // We store as ISO string WITHOUT timezone so PostgreSQL treats it as the "date" we want
+    const utcDate = new Date(payload.date);
+    const centralDateStr = formatInTimeZone(utcDate, TIMEZONE, "yyyy-MM-dd'T'HH:mm:ss.SSS");
+
+    console.log('Date conversion:', {
+      original: payload.date,
+      centralTime: centralDateStr
+    });
+
     const { data, error } = await supabase
       .from('transcriptions')
       .insert({
-        date: payload.date,
+        date: centralDateStr,
         transcription: payload.transcription,
         transcriptions: payload.transcriptions || [],
         raw_payload: payload
