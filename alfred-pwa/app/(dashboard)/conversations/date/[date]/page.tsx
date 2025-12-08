@@ -856,7 +856,7 @@ export default function ConversationsDatePage() {
                           <div className="flex-1">
                             <div className="flex items-center gap-2 mb-2">
                               <span className="text-xs text-gray-500">
-                                {formatDate(topic.startTime, 'h:mm a')}
+                                {formatDate(topic.startTime, 'h:mm a')} - {formatDate(topic.endTime, 'h:mm a')}
                               </span>
                             </div>
                             {editingTopicId === topic.id ? (

@@ -19,7 +19,7 @@ export async function chat(options: ChatOptions): Promise<string> {
   const { systemPrompt, messages, maxTokens = 4096 } = options;
 
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-opus-4-5-20251101',
     max_tokens: maxTokens,
     system: systemPrompt,
     messages: messages.map(m => ({
@@ -38,7 +38,7 @@ export async function generateSummary(
   maxTokens: number = 8192
 ): Promise<string> {
   const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-opus-4-5-20251101',
     max_tokens: maxTokens,
     system: systemPrompt,
     messages: [

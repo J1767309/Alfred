@@ -5,7 +5,7 @@ import { getCentralDayBoundariesUTC } from '@/lib/utils/dates';
 import { getAboutMe, getEntities } from '@/lib/claude/context';
 import { Entity } from '@/types/database';
 
-export const maxDuration = 120; // 2 minutes for large datasets
+export const maxDuration = 300; // 5 minutes for batched processing
 
 interface TranscriptInput {
   id: string;
@@ -62,6 +62,148 @@ Important guidelines:
 - Use entity context to correctly identify who is being discussed (e.g., if "Mike" is mentioned and there's an entity "Mike - Brother", reference him appropriately)
 
 Respond ONLY with the JSON array, no other text.`;
+
+// Maximum transcripts per batch for Claude processing
+const MAX_BATCH_SIZE = 40;
+// Time gap (in minutes) to consider as a conversation break
+const CONVERSATION_GAP_MINUTES = 30;
+
+/**
+ * Groups transcripts into time-based segments.
+ * Transcripts within CONVERSATION_GAP_MINUTES of each other are grouped together.
+ */
+function groupByTimeProximity(transcripts: TranscriptInput[]): TranscriptInput[][] {
+  if (transcripts.length === 0) return [];
+
+  // Sort by date
+  const sorted = [...transcripts].sort(
+    (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+  );
+
+  const groups: TranscriptInput[][] = [];
+  let currentGroup: TranscriptInput[] = [sorted[0]];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const prevTime = new Date(sorted[i - 1].date).getTime();
+    const currTime = new Date(sorted[i].date).getTime();
+    const gapMinutes = (currTime - prevTime) / (1000 * 60);
+
+    if (gapMinutes > CONVERSATION_GAP_MINUTES) {
+      // Start a new group
+      groups.push(currentGroup);
+      currentGroup = [sorted[i]];
+    } else {
+      currentGroup.push(sorted[i]);
+    }
+  }
+
+  // Don't forget the last group
+  if (currentGroup.length > 0) {
+    groups.push(currentGroup);
+  }
+
+  return groups;
+}
+
+/**
+ * Combines time-proximity groups into batches that fit within MAX_BATCH_SIZE.
+ * Tries to keep related conversations together while respecting the size limit.
+ */
+function createBatches(timeGroups: TranscriptInput[][]): TranscriptInput[][] {
+  const batches: TranscriptInput[][] = [];
+  let currentBatch: TranscriptInput[] = [];
+
+  for (const group of timeGroups) {
+    // If this single group exceeds max size, split it
+    if (group.length > MAX_BATCH_SIZE) {
+      // Flush current batch first
+      if (currentBatch.length > 0) {
+        batches.push(currentBatch);
+        currentBatch = [];
+      }
+      // Split the large group into chunks
+      for (let i = 0; i < group.length; i += MAX_BATCH_SIZE) {
+        batches.push(group.slice(i, i + MAX_BATCH_SIZE));
+      }
+    } else if (currentBatch.length + group.length > MAX_BATCH_SIZE) {
+      // Adding this group would exceed limit, start a new batch
+      batches.push(currentBatch);
+      currentBatch = [...group];
+    } else {
+      // Add to current batch
+      currentBatch.push(...group);
+    }
+  }
+
+  // Don't forget the last batch
+  if (currentBatch.length > 0) {
+    batches.push(currentBatch);
+  }
+
+  return batches;
+}
+
+/**
+ * Process a single batch of transcripts with Claude
+ */
+async function processBatch(
+  transcripts: TranscriptInput[],
+  contextSection: string,
+  batchIndex: number,
+  totalBatches: number
+): Promise<TopicCluster[]> {
+  const textLimit = 300; // Characters per transcript
+
+  const transcriptsForAnalysis = transcripts.map((t, index) => ({
+    index: index + 1,
+    id: t.id,
+    time: t.date,
+    text: t.transcription?.slice(0, textLimit) || '',
+  }));
+
+  const userPrompt = `${contextSection}# Transcriptions (Batch ${batchIndex + 1} of ${totalBatches})
+
+Here are ${transcripts.length} voice transcriptions to analyze and cluster by topic:
+
+${transcriptsForAnalysis.map(t =>
+  `[${t.index}] ${t.time}: ${t.text}${t.text.length >= textLimit ? '...' : ''} (ID:${t.id})`
+).join('\n')}
+
+Analyze these transcriptions and group them into topic clusters. Use the user context and entity information above to better understand who and what is being discussed. Return the JSON array of clusters.`;
+
+  console.log(`[Clustering] Processing batch ${batchIndex + 1}/${totalBatches} with ${transcripts.length} transcripts`);
+
+  const response = await generateSummary(CLUSTERING_PROMPT, userPrompt, 8192);
+
+  // Parse the response
+  try {
+    const jsonMatch = response.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        // Prefix topic IDs with batch index to ensure uniqueness
+        return parsed.map((topic: TopicCluster, idx: number) => ({
+          ...topic,
+          id: `batch${batchIndex}_topic_${idx + 1}`,
+        }));
+      }
+    }
+  } catch (parseError) {
+    console.error(`[Clustering] Failed to parse batch ${batchIndex + 1} response:`, parseError);
+  }
+
+  // Fallback: create a single topic for this batch
+  return [{
+    id: `batch${batchIndex}_topic_1`,
+    title: `Conversations (Part ${batchIndex + 1})`,
+    category: 'General',
+    summary: 'Grouped conversations from this time period',
+    sections: [],
+    transcriptIds: transcripts.map(t => t.id),
+    startTime: transcripts[0].date,
+    endTime: transcripts[transcripts.length - 1].date,
+  }];
+}
 
 export async function POST(request: NextRequest) {
   console.log('[Clustering] Starting topic clustering request');
@@ -127,30 +269,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ topics: [] });
     }
 
-    // Dynamically adjust text length based on transcript count to stay within token limits
-    // Claude has ~100k token context, but we need room for the response
-    // Rough estimate: 1 token ≈ 4 chars, so aim for ~60k chars max input
-    const transcriptCount = transcriptions.length;
-    let textLimit: number;
-    if (transcriptCount <= 50) {
-      textLimit = 400; // ~20k chars
-    } else if (transcriptCount <= 100) {
-      textLimit = 250; // ~25k chars
-    } else if (transcriptCount <= 200) {
-      textLimit = 150; // ~30k chars
-    } else {
-      textLimit = 100; // ~40k chars for 400+ transcripts
-    }
-
-    // Prepare transcripts for Claude with dynamic text limit
-    const transcriptsForAnalysis = transcriptions.map((t, index) => ({
-      index: index + 1,
-      id: t.id,
-      time: t.date,
-      text: t.transcription?.slice(0, textLimit) || '',
-    }));
-
-    // Build context section
+    // Build context section once (shared across all batches)
     const contextParts: string[] = [];
 
     if (aboutMe) {
@@ -172,78 +291,77 @@ export async function POST(request: NextRequest) {
       ? `# User Context\n\n${contextParts.join('\n\n')}\n\n---\n\n`
       : '';
 
-    const userPrompt = `${contextSection}# Transcriptions
+    // For small datasets, process in one shot
+    if (transcriptions.length <= MAX_BATCH_SIZE) {
+      console.log('[Clustering] Small dataset, processing in single batch');
+      const topics = await processBatch(transcriptions, contextSection, 0, 1);
 
-Here are ${transcriptions.length} voice transcriptions to analyze and cluster by topic:
+      // Enrich topics with full transcript data
+      const enrichedTopics = topics.map(topic => ({
+        ...topic,
+        transcripts: transcriptions.filter(t => topic.transcriptIds.includes(t.id)),
+      }));
 
-${transcriptsForAnalysis.map(t =>
-  `[${t.index}] ${t.time}: ${t.text}${t.text.length >= textLimit ? '...' : ''} (ID:${t.id})`
-).join('\n')}
-
-Analyze these transcriptions and group them into topic clusters. Use the user context and entity information above to better understand who and what is being discussed. Return the JSON array of clusters.`;
-
-    // Call Claude to cluster - use more tokens for larger datasets
-    // Need enough tokens to generate detailed clusters with summaries and sections
-    let maxTokens: number;
-    if (transcriptCount > 100) {
-      maxTokens = 16384;
-    } else if (transcriptCount > 50) {
-      maxTokens = 12288;
-    } else if (transcriptCount > 20) {
-      maxTokens = 8192;
-    } else {
-      maxTokens = 4096;
-    }
-
-    console.log('[Clustering] Calling Claude with', {
-      transcriptCount,
-      textLimit,
-      maxTokens,
-      promptLength: userPrompt.length
-    });
-
-    const response = await generateSummary(CLUSTERING_PROMPT, userPrompt, maxTokens);
-    console.log('[Clustering] Claude response received, length:', response.length);
-
-    // Parse the response
-    let topics: TopicCluster[] = [];
-    try {
-      // Try to extract JSON from the response
-      const jsonMatch = response.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          topics = parsed;
-          console.log('[Clustering] Successfully parsed', topics.length, 'topics');
-        } else {
-          console.error('[Clustering] Parsed result is empty or not an array');
-        }
-      } else {
-        console.error('[Clustering] No JSON array found in response');
-        console.error('[Clustering] Response preview:', response.substring(0, 500));
+      // Save to database if we have a date
+      if (date) {
+        await supabase.from('topic_clusters').upsert({
+          user_id: user.id,
+          cluster_date: date,
+          topics: enrichedTopics,
+          transcription_count: transcriptions.length,
+          updated_at: new Date().toISOString(),
+        }, {
+          onConflict: 'user_id,cluster_date',
+        });
       }
-    } catch (parseError) {
-      console.error('[Clustering] Failed to parse clustering response:', parseError);
-      console.error('[Clustering] Response preview:', response.substring(0, 500));
+
+      return NextResponse.json({ topics: enrichedTopics });
     }
 
-    // Only use fallback if we truly have no topics
-    if (topics.length === 0) {
-      console.log('[Clustering] Using fallback single topic');
-      topics = [{
-        id: 'topic_1',
-        title: 'Daily Conversations',
-        category: 'General',
-        summary: 'Various conversations throughout the day',
-        sections: [],
-        transcriptIds: transcriptions.map(t => t.id),
-        startTime: transcriptions[0].date,
-        endTime: transcriptions[transcriptions.length - 1].date,
-      }];
+    // For large datasets, batch by time proximity
+    console.log('[Clustering] Large dataset, using batched processing');
+
+    // Group by time proximity first
+    const timeGroups = groupByTimeProximity(transcriptions);
+    console.log('[Clustering] Created', timeGroups.length, 'time-proximity groups');
+
+    // Create batches that fit within size limit
+    const batches = createBatches(timeGroups);
+    console.log('[Clustering] Created', batches.length, 'batches for processing');
+
+    // Process batches sequentially to avoid rate limits
+    const allTopics: TopicCluster[] = [];
+
+    for (let i = 0; i < batches.length; i++) {
+      try {
+        const batchTopics = await processBatch(batches[i], contextSection, i, batches.length);
+        allTopics.push(...batchTopics);
+
+        // Small delay between batches to be nice to the API
+        if (i < batches.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      } catch (batchError) {
+        console.error(`[Clustering] Batch ${i + 1} failed:`, batchError);
+        // Create fallback topic for failed batch
+        const batch = batches[i];
+        allTopics.push({
+          id: `batch${i}_fallback`,
+          title: `Conversations (Part ${i + 1})`,
+          category: 'General',
+          summary: 'Grouped conversations from this time period',
+          sections: [],
+          transcriptIds: batch.map(t => t.id),
+          startTime: batch[0].date,
+          endTime: batch[batch.length - 1].date,
+        });
+      }
     }
+
+    console.log('[Clustering] Total topics generated:', allTopics.length);
 
     // Enrich topics with full transcript data
-    const enrichedTopics = topics.map(topic => ({
+    const enrichedTopics = allTopics.map(topic => ({
       ...topic,
       transcripts: transcriptions.filter(t => topic.transcriptIds.includes(t.id)),
     }));
