@@ -83,6 +83,10 @@ export default function ConversationsPage() {
         subtitle="AI-generated summaries of your transcribed conversations"
       />
 
+      <div className="bg-yellow-500 text-black px-4 py-2 text-center font-medium">
+        Greetings John
+      </div>
+
       <div className="flex-1 overflow-auto p-6">
         {loading ? (
           <div className="space-y-6">
