@@ -68,8 +68,8 @@ interface TranscriptInput {
   transcription: string;
 }
 
-// Maximum transcripts per batch for Claude processing
-const MAX_BATCH_SIZE = 40;
+// Maximum transcripts per batch for Claude processing (smaller = faster per batch)
+const MAX_BATCH_SIZE = 25;
 // Time gap (in minutes) to consider as a conversation break
 const CONVERSATION_GAP_MINUTES = 30;
 
@@ -147,7 +147,7 @@ async function processBatch(
   totalBatches: number
 ): Promise<TopicCluster[]> {
   // Reduce text limit for larger batches to stay within context limits
-  const textLimit = transcripts.length > 30 ? 200 : 300;
+  const textLimit = transcripts.length > 20 ? 150 : 250;
 
   const transcriptsForAnalysis = transcripts.map((t, index) => ({
     index: index + 1,

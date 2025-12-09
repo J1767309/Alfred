@@ -132,7 +132,7 @@ export default function ConversationsDatePage() {
 
     // Use AbortController for timeout handling
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 180000); // 3 minute timeout
+    const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minute timeout
 
     try {
       console.log('[Frontend] Starting clustering for date:', dateParam);
@@ -262,7 +262,7 @@ export default function ConversationsDatePage() {
     setClusterError(null);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 180000);
+    const timeoutId = setTimeout(() => controller.abort(), 300000);
 
     try {
       const response = await fetch('/api/clustering/topics', {
@@ -434,7 +434,7 @@ export default function ConversationsDatePage() {
     setClusterError(null);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 180000);
+    const timeoutId = setTimeout(() => controller.abort(), 300000);
 
     try {
       const response = await fetch('/api/clustering/topics', {
@@ -488,7 +488,7 @@ export default function ConversationsDatePage() {
     setSelectedTopics(new Set());
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 180000);
+    const timeoutId = setTimeout(() => controller.abort(), 300000);
 
     try {
       const response = await fetch('/api/clustering/topics', {
