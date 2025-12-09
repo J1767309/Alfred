@@ -652,7 +652,7 @@ export default function ConversationsDatePage() {
                   </span>
                 </div>
                 <span className="text-xs text-gray-500">
-                  Auto-clusters run 5x daily
+                  Auto-clusters: 6 AM, 10 AM, 2 PM, 6 PM, 10 PM UTC
                 </span>
               </div>
             )}
