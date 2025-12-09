@@ -311,31 +311,28 @@ export async function GET(request: NextRequest) {
           // For large datasets, batch by time proximity
           const timeGroups = groupByTimeProximity(transcriptions);
           const batches = createBatches(timeGroups);
-          console.log(`[Cron Clustering] User ${userId}: Processing ${batches.length} batches`);
+          console.log(`[Cron Clustering] User ${userId}: Processing ${batches.length} batches in parallel`);
 
-          for (let i = 0; i < batches.length; i++) {
-            try {
-              const batchTopics = await processBatch(batches[i], contextSection, i, batches.length);
-              allTopics.push(...batchTopics);
+          // Process batches in PARALLEL for much faster completion
+          const batchPromises = batches.map((batch, i) =>
+            processBatch(batch, contextSection, i, batches.length)
+              .catch((error): TopicCluster[] => {
+                console.error(`[Cron Clustering] Batch ${i + 1} failed for user ${userId}:`, error);
+                return [{
+                  id: `batch${i}_fallback`,
+                  title: `Conversations (Part ${i + 1})`,
+                  category: 'General',
+                  summary: 'Grouped conversations from this time period',
+                  sections: [],
+                  transcriptIds: batch.map(t => t.id),
+                  startTime: batch[0].date,
+                  endTime: batch[batch.length - 1].date,
+                }];
+              })
+          );
 
-              if (i < batches.length - 1) {
-                await new Promise(resolve => setTimeout(resolve, 500));
-              }
-            } catch (batchError) {
-              console.error(`[Cron Clustering] Batch ${i + 1} failed for user ${userId}:`, batchError);
-              const batch = batches[i];
-              allTopics.push({
-                id: `batch${i}_fallback`,
-                title: `Conversations (Part ${i + 1})`,
-                category: 'General',
-                summary: 'Grouped conversations from this time period',
-                sections: [],
-                transcriptIds: batch.map(t => t.id),
-                startTime: batch[0].date,
-                endTime: batch[batch.length - 1].date,
-              });
-            }
-          }
+          const batchResults = await Promise.all(batchPromises);
+          allTopics = batchResults.flat();
         }
 
         // Save to database - DO NOT include full transcripts to avoid large JSONB payloads

@@ -45,6 +45,7 @@ export default function ConversationsDatePage() {
   const [editingTitle, setEditingTitle] = useState('');
   const [trashedIds, setTrashedIds] = useState<Set<string>>(new Set());
   const [showTrash, setShowTrash] = useState(false);
+  const [lastClusteredAt, setLastClusteredAt] = useState<string | null>(null);
   const supabase = createClient();
 
   const dateParam = params.date as string;
@@ -85,7 +86,7 @@ export default function ConversationsDatePage() {
           .order('date', { ascending: false }),
         supabase
           .from('topic_clusters')
-          .select('topics')
+          .select('topics, updated_at')
           .eq('user_id', user.id)
           .eq('cluster_date', dateParam)
           .single()
@@ -113,8 +114,13 @@ export default function ConversationsDatePage() {
         );
         setTopics(sortedTopics);
         setViewMode('topics');
+        // Track when clustering last happened
+        if (clustersResult.data.updated_at) {
+          setLastClusteredAt(clustersResult.data.updated_at);
+        }
       } else {
         setTopics([]);
+        setLastClusteredAt(null);
         // Will trigger auto-clustering via useEffect if we have transcriptions
       }
     } catch (error) {
@@ -631,6 +637,23 @@ export default function ConversationsDatePage() {
             {clusterError && (
               <div className="mb-4 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
                 <p className="text-red-400 text-sm">{clusterError}</p>
+              </div>
+            )}
+
+            {/* Last clustered timestamp */}
+            {lastClusteredAt && (
+              <div className="mb-4 p-3 bg-brand-primary/5 border border-brand-primary/20 rounded-lg flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <svg className="w-4 h-4 text-brand-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="text-sm text-gray-400">
+                    Last clustered: <span className="text-brand-primary">{formatDate(lastClusteredAt, 'MMM d, h:mm a')}</span>
+                  </span>
+                </div>
+                <span className="text-xs text-gray-500">
+                  Auto-clusters run 5x daily
+                </span>
               </div>
             )}
 

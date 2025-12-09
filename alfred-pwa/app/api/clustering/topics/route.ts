@@ -343,34 +343,27 @@ export async function POST(request: NextRequest) {
     const batches = createBatches(timeGroups);
     console.log('[Clustering] Created', batches.length, 'batches for processing');
 
-    // Process batches sequentially to avoid rate limits
-    const allTopics: TopicCluster[] = [];
+    // Process batches in PARALLEL for much faster completion
+    const batchPromises = batches.map((batch, i) =>
+      processBatch(batch, contextSection, i, batches.length)
+        .catch((error): TopicCluster[] => {
+          console.error(`[Clustering] Batch ${i + 1} failed:`, error);
+          // Return fallback topic for failed batch
+          return [{
+            id: `batch${i}_fallback`,
+            title: `Conversations (Part ${i + 1})`,
+            category: 'General',
+            summary: 'Grouped conversations from this time period',
+            sections: [],
+            transcriptIds: batch.map(t => t.id),
+            startTime: batch[0].date,
+            endTime: batch[batch.length - 1].date,
+          }];
+        })
+    );
 
-    for (let i = 0; i < batches.length; i++) {
-      try {
-        const batchTopics = await processBatch(batches[i], contextSection, i, batches.length);
-        allTopics.push(...batchTopics);
-
-        // Small delay between batches to be nice to the API
-        if (i < batches.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
-      } catch (batchError) {
-        console.error(`[Clustering] Batch ${i + 1} failed:`, batchError);
-        // Create fallback topic for failed batch
-        const batch = batches[i];
-        allTopics.push({
-          id: `batch${i}_fallback`,
-          title: `Conversations (Part ${i + 1})`,
-          category: 'General',
-          summary: 'Grouped conversations from this time period',
-          sections: [],
-          transcriptIds: batch.map(t => t.id),
-          startTime: batch[0].date,
-          endTime: batch[batch.length - 1].date,
-        });
-      }
-    }
+    const batchResults = await Promise.all(batchPromises);
+    const allTopics: TopicCluster[] = batchResults.flat();
 
     console.log('[Clustering] Total topics generated:', allTopics.length);
 
