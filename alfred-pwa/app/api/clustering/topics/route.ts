@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
-import { generateSummary } from '@/lib/claude/client';
 import { getCentralDayBoundariesUTC } from '@/lib/utils/dates';
 import { getAboutMe, getEntities } from '@/lib/claude/context';
 import { Entity } from '@/types/database';
+import Anthropic from '@anthropic-ai/sdk';
 
 export const maxDuration = 300; // 5 minutes for batched processing
+
+// Use Sonnet for faster, more reliable clustering
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
 
 interface TranscriptInput {
   id: string;
@@ -144,7 +149,7 @@ function createBatches(timeGroups: TranscriptInput[][]): TranscriptInput[][] {
 }
 
 /**
- * Process a single batch of transcripts with Claude
+ * Process a single batch of transcripts with Claude Sonnet (faster for clustering)
  */
 async function processBatch(
   transcripts: TranscriptInput[],
@@ -152,7 +157,8 @@ async function processBatch(
   batchIndex: number,
   totalBatches: number
 ): Promise<TopicCluster[]> {
-  const textLimit = 300; // Characters per transcript
+  // Reduce text limit for larger batches to stay within context limits
+  const textLimit = transcripts.length > 30 ? 200 : 300;
 
   const transcriptsForAnalysis = transcripts.map((t, index) => ({
     index: index + 1,
@@ -173,11 +179,19 @@ Analyze these transcriptions and group them into topic clusters. Use the user co
 
   console.log(`[Clustering] Processing batch ${batchIndex + 1}/${totalBatches} with ${transcripts.length} transcripts`);
 
-  const response = await generateSummary(CLUSTERING_PROMPT, userPrompt, 8192);
-
-  // Parse the response
   try {
-    const jsonMatch = response.match(/\[[\s\S]*\]/);
+    // Use Sonnet for faster, more reliable clustering
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4096,
+      system: CLUSTERING_PROMPT,
+      messages: [{ role: 'user', content: userPrompt }],
+    });
+
+    const textContent = response.content.find(c => c.type === 'text');
+    const responseText = textContent?.text || '';
+
+    const jsonMatch = responseText.match(/\[[\s\S]*\]/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -188,8 +202,8 @@ Analyze these transcriptions and group them into topic clusters. Use the user co
         }));
       }
     }
-  } catch (parseError) {
-    console.error(`[Clustering] Failed to parse batch ${batchIndex + 1} response:`, parseError);
+  } catch (error) {
+    console.error(`[Clustering] Failed to process batch ${batchIndex + 1}:`, error);
   }
 
   // Fallback: create a single topic for this batch
@@ -296,24 +310,24 @@ export async function POST(request: NextRequest) {
       console.log('[Clustering] Small dataset, processing in single batch');
       const topics = await processBatch(transcriptions, contextSection, 0, 1);
 
-      // Enrich topics with full transcript data
-      const enrichedTopics = topics.map(topic => ({
-        ...topic,
-        transcripts: transcriptions.filter(t => topic.transcriptIds.includes(t.id)),
-      }));
-
-      // Save to database if we have a date
+      // Save to database if we have a date - store only IDs, not full transcripts
       if (date) {
         await supabase.from('topic_clusters').upsert({
           user_id: user.id,
           cluster_date: date,
-          topics: enrichedTopics,
+          topics: topics,
           transcription_count: transcriptions.length,
           updated_at: new Date().toISOString(),
         }, {
           onConflict: 'user_id,cluster_date',
         });
       }
+
+      // Enrich topics with full transcript data for the response
+      const enrichedTopics = topics.map(topic => ({
+        ...topic,
+        transcripts: transcriptions.filter(t => topic.transcriptIds.includes(t.id)),
+      }));
 
       return NextResponse.json({ topics: enrichedTopics });
     }
@@ -360,24 +374,24 @@ export async function POST(request: NextRequest) {
 
     console.log('[Clustering] Total topics generated:', allTopics.length);
 
-    // Enrich topics with full transcript data
-    const enrichedTopics = allTopics.map(topic => ({
-      ...topic,
-      transcripts: transcriptions.filter(t => topic.transcriptIds.includes(t.id)),
-    }));
-
-    // Save to database if we have a date
+    // Save to database if we have a date - store only IDs, not full transcripts
     if (date) {
       await supabase.from('topic_clusters').upsert({
         user_id: user.id,
         cluster_date: date,
-        topics: enrichedTopics,
+        topics: allTopics,
         transcription_count: transcriptions.length,
         updated_at: new Date().toISOString(),
       }, {
         onConflict: 'user_id,cluster_date',
       });
     }
+
+    // Enrich topics with full transcript data for the response
+    const enrichedTopics = allTopics.map(topic => ({
+      ...topic,
+      transcripts: transcriptions.filter(t => topic.transcriptIds.includes(t.id)),
+    }));
 
     return NextResponse.json({ topics: enrichedTopics });
   } catch (error) {

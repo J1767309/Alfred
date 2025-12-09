@@ -92,11 +92,23 @@ export default function ConversationsDatePage() {
       ]);
 
       if (transcriptionsResult.error) throw transcriptionsResult.error;
-      setTranscriptions(transcriptionsResult.data || []);
+      const loadedTranscriptions = transcriptionsResult.data || [];
+      setTranscriptions(loadedTranscriptions);
 
-      // If we have saved clusters, load them automatically (sorted by most recent first)
+      // If we have saved clusters, load them and join with transcriptions
       if (clustersResult.data?.topics) {
-        const sortedTopics = [...(clustersResult.data.topics as TopicCluster[])].sort(
+        // Create a lookup map for transcriptions
+        const transcriptionMap = new Map(loadedTranscriptions.map(t => [t.id, t]));
+
+        // Enrich topics with transcript data (they're stored without full text to reduce DB size)
+        const enrichedTopics = (clustersResult.data.topics as TopicCluster[]).map(topic => ({
+          ...topic,
+          transcripts: topic.transcriptIds
+            .map(id => transcriptionMap.get(id))
+            .filter((t): t is Transcription => t !== undefined),
+        }));
+
+        const sortedTopics = enrichedTopics.sort(
           (a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
         );
         setTopics(sortedTopics);
@@ -219,16 +231,19 @@ export default function ConversationsDatePage() {
     setTimeout(() => setCopiedTopicId(null), 2000);
   };
 
-  // Save topics to database
+  // Save topics to database (without full transcript text to reduce DB size)
   const saveTopics = async (newTopics: TopicCluster[]) => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
+      // Strip out transcripts field before saving - only keep transcriptIds
+      const topicsForStorage = newTopics.map(({ transcripts, ...rest }) => rest);
+
       await supabase.from('topic_clusters').upsert({
         user_id: user.id,
         cluster_date: dateParam,
-        topics: newTopics,
+        topics: topicsForStorage,
         transcription_count: transcriptions.length,
         updated_at: new Date().toISOString(),
       }, {

@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/server';
-import { generateSummary } from '@/lib/claude/client';
 import { formatInTimeZone } from 'date-fns-tz';
 import { getCentralDayBoundariesUTC } from '@/lib/utils/dates';
 import { getAboutMe, getEntities } from '@/lib/claude/context';
 import { Entity } from '@/types/database';
+import Anthropic from '@anthropic-ai/sdk';
 
 const TIMEZONE = 'America/Chicago';
 
 export const maxDuration = 300; // 5 minutes for batched processing
+
+// Use Sonnet for faster, more reliable clustering
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
 
 const CLUSTERING_PROMPT = `You are an AI that analyzes voice transcriptions and groups them into coherent topic clusters.
 
@@ -133,7 +138,7 @@ function createBatches(timeGroups: TranscriptInput[][]): TranscriptInput[][] {
 }
 
 /**
- * Process a single batch of transcripts with Claude
+ * Process a single batch of transcripts with Claude Sonnet (faster for clustering)
  */
 async function processBatch(
   transcripts: TranscriptInput[],
@@ -141,7 +146,8 @@ async function processBatch(
   batchIndex: number,
   totalBatches: number
 ): Promise<TopicCluster[]> {
-  const textLimit = 300;
+  // Reduce text limit for larger batches to stay within context limits
+  const textLimit = transcripts.length > 30 ? 200 : 300;
 
   const transcriptsForAnalysis = transcripts.map((t, index) => ({
     index: index + 1,
@@ -162,10 +168,19 @@ Analyze these transcriptions and group them into topic clusters. Return the JSON
 
   console.log(`[Cron Clustering] Processing batch ${batchIndex + 1}/${totalBatches} with ${transcripts.length} transcripts`);
 
-  const response = await generateSummary(CLUSTERING_PROMPT, userPrompt, 8192);
-
   try {
-    const jsonMatch = response.match(/\[[\s\S]*\]/);
+    // Use Sonnet for faster, more reliable clustering
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4096,
+      system: CLUSTERING_PROMPT,
+      messages: [{ role: 'user', content: userPrompt }],
+    });
+
+    const textContent = response.content.find(c => c.type === 'text');
+    const responseText = textContent?.text || '';
+
+    const jsonMatch = responseText.match(/\[[\s\S]*\]/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -175,8 +190,8 @@ Analyze these transcriptions and group them into topic clusters. Return the JSON
         }));
       }
     }
-  } catch (parseError) {
-    console.error(`[Cron Clustering] Failed to parse batch ${batchIndex + 1} response:`, parseError);
+  } catch (error) {
+    console.error(`[Cron Clustering] Failed to process batch ${batchIndex + 1}:`, error);
   }
 
   return [{
@@ -323,17 +338,12 @@ export async function GET(request: NextRequest) {
           }
         }
 
-        // Enrich topics with full transcript data
-        const enrichedTopics = allTopics.map(topic => ({
-          ...topic,
-          transcripts: transcriptions.filter((t: { id: string }) => topic.transcriptIds.includes(t.id)),
-        }));
-
-        // Save to database
+        // Save to database - DO NOT include full transcripts to avoid large JSONB payloads
+        // The frontend will join transcripts by ID when displaying
         await supabase.from('topic_clusters').upsert({
           user_id: userId,
           cluster_date: todayStr,
-          topics: enrichedTopics,
+          topics: allTopics, // Only store topic metadata + transcriptIds, not full transcript text
           transcription_count: transcriptions.length,
           updated_at: new Date().toISOString(),
         }, {
